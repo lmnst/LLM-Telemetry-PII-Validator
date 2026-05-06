@@ -29,6 +29,52 @@ The failure modes that matter for ingest aren't the happy path — they're:
 Every one of those is a typed `DownloadError`; none can leave a half-written
 destination behind.
 
+## Anatomy of a download
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor App as Caller
+    participant DL as Downloader
+    participant FS as FileAssembler
+    participant Srv as HTTP Server
+
+    App->>DL: download(uri, dest)
+    DL->>Srv: HEAD
+    Srv-->>DL: 200 (Accept-Ranges, ETag, Content-Length=N)
+    DL->>+FS: open dest.part
+
+    Note right of DL: Probe chunk 0 runs synchronously<br/>— a 200-on-ranged-GET here is<br/>treated as the full body, so no<br/>parallel writes ever overlap.
+    DL->>Srv: GET Range: bytes=0-(C-1)
+    Srv-->>DL: 206 Partial Content
+    DL->>FS: write @offset 0
+
+    par Chunks 1..k (Semaphore-bounded by parallelism)
+        DL->>Srv: GET bytes=C-(2C-1)
+        Srv-->>DL: 206
+        DL->>FS: write @offset C
+    and
+        DL->>Srv: GET bytes=2C-(3C-1)
+        Srv-->>DL: 206
+        DL->>FS: write @offset 2C
+    and
+        DL->>Srv: GET bytes=...
+        Srv-->>DL: 206
+        DL->>FS: write @offset ...
+    end
+
+    Note right of DL: SHA-256 streams the temp file<br/>BEFORE the atomic move, so a<br/>corrupt file is never visible at dest.
+    DL->>FS: stream digest
+    DL->>FS: fsync + ATOMIC_MOVE -> dest
+    FS-->>-DL: committed
+    DL-->>App: Success(bytes, elapsed, sha256?)
+```
+
+The same flow handles resumption (chunks already in the sidecar bitmap
+are skipped instead of re-fetched) and failure (any typed error aborts
+before the atomic move; the destination path is never touched). See
+[DESIGN.md](DESIGN.md) for the full state machine.
+
 ## Requirements
 
 - Java 21+
@@ -87,7 +133,7 @@ ResumeStrategy        — enum: FRESH (default) | RESUME_IF_VALID
 ProgressListener      — onProgress(ProgressEvent); NO_OP default
 ProgressEvent         — sealed: Started | ChunkCompleted | Failed | Finished
 ByteRange             — record (offset, length); inclusive HTTP byte semantics
-cli.Main              — entry point for ./gradlew run
+cli.Main              — entry point for the installed CLI binary
 ```
 
 ## Behavior matrix
