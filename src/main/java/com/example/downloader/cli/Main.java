@@ -5,6 +5,7 @@ import com.example.downloader.Downloader;
 import com.example.downloader.DownloaderOptions;
 import com.example.downloader.DownloadResult;
 import com.example.downloader.HttpStatusException;
+import com.example.downloader.ResumeStrategy;
 
 import java.io.PrintStream;
 import java.net.URI;
@@ -36,6 +37,10 @@ public final class Main {
               --parallelism <int>   Maximum concurrent ranged GETs. Default: 8.
               --sha256 <hex>        Verify the download against this SHA-256 (64 hex chars).
                                     Mismatch fails with exit 4; destination is not written.
+              --resume              Resume an interrupted download. Re-uses an existing
+                                    .part / .part.json sidecar if its recorded ETag,
+                                    contentLength, and chunkSize all still match the
+                                    server's HEAD response; mismatch fails with exit 6.
               --report <text|json>  Output format. Default: text.
               -h, --help            Show this help and exit.
 
@@ -89,6 +94,7 @@ public final class Main {
         Long chunkSize;
         Integer parallelism;
         byte[] sha256;
+        boolean resume;
         Report report = Report.TEXT;
         boolean help;
 
@@ -103,6 +109,7 @@ public final class Main {
                     case "--chunk-size"  -> a.chunkSize = parseSize(value(argv, ++i, s));
                     case "--parallelism" -> a.parallelism = parsePositiveInt(value(argv, ++i, s));
                     case "--sha256"      -> a.sha256 = parseHex(value(argv, ++i, s), 32);
+                    case "--resume"      -> a.resume = true;
                     case "--report"      -> a.report = parseReport(value(argv, ++i, s));
                     default              -> throw new UsageException("unknown flag: " + s);
                 }
@@ -208,6 +215,7 @@ public final class Main {
         if (a.chunkSize != null) b.chunkSize(a.chunkSize);
         if (a.parallelism != null) b.parallelism(a.parallelism);
         if (a.sha256 != null) b.expectedDigest(Algorithm.SHA_256, a.sha256);
+        if (a.resume) b.resumeStrategy(ResumeStrategy.RESUME_IF_VALID);
         return b.build();
     }
 
@@ -256,6 +264,7 @@ public final class Main {
             case IO_ERROR, TIMEOUT                -> EXIT_TRANSIENT;
             case SIZE_MISMATCH, INTEGRITY_FAILURE -> EXIT_INTEGRITY;
             case CANCELLED                        -> EXIT_CANCELLED;
+            case RESOURCE_CHANGED                 -> EXIT_RESOURCE_CHANGED;
             case RANGES_NOT_SUPPORTED             -> EXIT_GENERIC;
         };
     }

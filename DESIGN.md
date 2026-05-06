@@ -48,11 +48,104 @@ A mismatch means the server returned data for the wrong byte range and the write
 
 If `Content-Range` is absent on a `206` response, the response is tolerated. RFC 9110 §14.4 does not require the header when the response covers the exact requested range, and some CDNs omit it.
 
-## HEAD/GET consistency and `If-Range`
+## HEAD/GET consistency, `If-Range`, and resumption
 
-Without `If-Range`, if the server replaces or truncates the file between the HEAD request and the chunk GETs, the downloader may either fail with `SIZE_MISMATCH` (if the byte count changes) or silently produce a mix of old and new bytes (if the byte count stays the same). This residual risk is accepted.
+In `RESUME_IF_VALID` mode the downloader threads the HEAD's `ETag` (or
+`Last-Modified` when no ETag is present) into the per-chunk GET as `If-Range`.
+A 206 means the validator still matches and the partial download is sound; a
+200 on a ranged GET-with-If-Range means the server has replaced the resource —
+the adapter surfaces this as `GetResponse.ifRangeMismatch()` and the downloader
+fails fast with `RESOURCE_CHANGED` rather than corrupting the partial.
 
-`JdkHttpAdapter` captures the `ETag` from HEAD (stored in `HeadResponse.etag()`), but this value is not sent on chunk GET requests. Implementing `If-Range` would require adding an `ifRange` parameter to `HttpAdapter.get()`, passing the validator into each ranged GET, and treating a `200` response (resource changed or Range became invalid) as a typed `RESOURCE_CHANGED` failure. That is explicitly future work.
+In `FRESH` mode (default) `If-Range` is not sent. A 200 response on a ranged
+GET in this mode is the legacy "server lies about Accept-Ranges" path: only
+chunk 0 has run, no parallel work has started, and the body is treated as the
+full file (see "The 200 OK vs 206 Partial Content corruption hazard").
+
+The two semantics for a 200 on a ranged GET are distinguished entirely by
+whether `If-Range` was sent — the adapter knows this and reports it on the
+`GetResponse`, so the Downloader does not have to track mode separately.
+
+## Resumption state machine
+
+The sidecar `<dest>.part.json` records `version`, `url`, `etag`,
+`lastModified`, `contentLength`, `chunkSize`, and a hex-encoded `BitSet` of
+completed chunk indices. It is written atomically (`.part.json.tmp` →
+`fsync` → rename) after each chunk's successful write+verify.
+
+```
+                       ┌──────────────┐
+                       │  download()  │
+                       └──────┬───────┘
+                              ▼
+                         ┌────────┐
+                         │  HEAD  │
+                         └───┬────┘
+                             │
+              ┌──────────────┴──────────────┐
+              ▼                             ▼
+        FRESH (default)             RESUME_IF_VALID
+              │                             │
+              │              ┌──────────────┴──────────────┐
+              │              ▼                             ▼
+              │    .part.json missing            .part.json present
+              │              │                             │
+              │              │            ┌────────────────┴───────────────┐
+              │              │            ▼                                ▼
+              │              │  validators match HEAD?           any field differs
+              │              │  (url, etag/lastModified,         (or unreadable)
+              │              │   contentLength, chunkSize)                 │
+              │              │            │                                ▼
+              │              │            │                    fail RESOURCE_CHANGED
+              │              │            │                    (preserve .part / .part.json
+              │              │            │                     so caller can decide)
+              │              │            │
+              ▼              ▼            ▼
+       delete any old   write fresh   reuse existing
+       .part / .part.json,  manifest    manifest;
+       create fresh       (empty       skip chunks
+       empty .part        bitmap)      already in bitmap
+              │              │            │
+              └──────────┬───┴────────────┘
+                         ▼
+              ┌──────────────────────────┐
+              │ probe chunk 0            │
+              │ (with If-Range in        │
+              │  RESUME_IF_VALID mode;   │
+              │  skipped if already in   │
+              │  the completed bitmap)   │
+              └────────┬─────────────────┘
+                       │
+        ┌──────────────┼──────────────────────────┐
+        ▼              ▼                          ▼
+     200,           200, no             206 (Content-Range
+     If-Range       If-Range            valid)
+     sent           sent                          │
+        │              │                          ▼
+        ▼          treat as          parallel chunks 1..N-1
+   fail RESOURCE   full body         (skip those already in
+   _CHANGED       and commit         bitmap; per-chunk:
+                  (single             update bitmap +
+                  chunk path)         atomic manifest flush)
+                                              │
+                                              ▼
+                                ┌───────────────────────────┐
+                                │ verifyAndCommit:          │
+                                │   stream digest (if any)  │
+                                │   asm.commit() {          │
+                                │     fsync, atomic move,   │
+                                │     delete manifest       │
+                                │   }                       │
+                                └───────────────────────────┘
+```
+
+`FRESH` always wipes existing artifacts. `RESUME_IF_VALID` either replays the
+bitmap or fails fast with `RESOURCE_CHANGED`. There is no path that silently
+mixes old and new bytes — every transition is either ticked off in the
+bitmap, fenced by `If-Range`, or terminated.
+
+Single-stream downloads (`!canParallel`) bypass the manifest entirely: there
+is no checkpointable state, so resumption is a no-op even when requested.
 
 ## Streaming integrity verification
 
@@ -77,17 +170,27 @@ and a `digestLengthBytes()` arm.
 
 ## Atomic write strategy and failure cleanup guarantees
 
-`FileAssembler` creates a temp file in the same directory as the destination (so `Files.move` stays on the same filesystem and `ATOMIC_MOVE` is available). The lifecycle:
+`FileAssembler` opens the temp file at the deterministic path `<dest>.part`
+in the same directory as the destination (so `Files.move` stays on the same
+filesystem and `ATOMIC_MOVE` is available). The lifecycle:
 
-1. `open` — `Files.createTempFile(destinationDir, name., .part)`
-2. `write` — concurrent `FileChannel.write(buf, position)` calls at non-overlapping offsets (thread-safe per JDK spec)
-3. `commit` — `FileChannel.force(true)` (fsync data + metadata), then `Files.move(temp, dest, ATOMIC_MOVE, REPLACE_EXISTING)`
-4. `abort` — channel close + `Files.deleteIfExists(temp)`
+1. `open` — `FileChannel.open(<dest>.part, WRITE | READ | CREATE)`. In FRESH mode,
+   any existing `.part` and `.part.json` are deleted first; in RESUME mode they
+   are preserved so the existing partial can be extended.
+2. `write` — concurrent `FileChannel.write(buf, position)` calls at non-overlapping
+   offsets (thread-safe per JDK spec)
+3. `commit` — `FileChannel.force(true)` (fsync data + metadata), `Files.move(temp,
+   dest, ATOMIC_MOVE, REPLACE_EXISTING)`, then `Files.deleteIfExists(manifestFile)`
+4. `abort` — channel close. In FRESH mode also deletes `.part` and `.part.json`;
+   in RESUME mode preserves them so the caller can retry `--resume`.
 
-**Success**: destination exists and is complete.  
-**Any failure before commit**: `abort()` is called; `.part` is deleted; destination is never written.  
-**Existing destination on failure**: because the temp file is deleted and `ATOMIC_MOVE` never ran, the original destination file is left intact.  
-**Destination is a directory**: detected in the `FileAssembler` constructor before any temp file is created; fails with `IO_ERROR`.
+**Success**: destination exists and is complete; `.part` and `.part.json` are gone.
+**Failure in FRESH mode**: `.part` deleted; destination never written.
+**Failure in RESUME mode**: `.part` and `.part.json` preserved; destination never written.
+**Existing destination on failure**: because the temp file is moved (not the destination
+overwritten), and `ATOMIC_MOVE` never ran, the original destination file is left intact.
+**Destination is a directory**: detected in the `FileAssembler` constructor before
+any temp file is created; fails with `IO_ERROR`.
 
 `abort()` and `close()` are both idempotent.
 
@@ -104,15 +207,8 @@ Delay formula: `random(0, min(30 s, baseDelay × 2^attempt))` — full jitter pr
 
 ## What is deliberately out of scope
 
-- **`If-Range` / per-chunk ETag resumption**: adds significant state threading; useful for chunk sizes > 64 MiB where a mid-chunk retry wastes meaningful bandwidth.
-- ~~**Caller-supplied SHA-256 verification**~~: now a first-class option (`expectedDigest(Algorithm.SHA_256, byte[])`). See "Streaming integrity verification" above.
-- **Progress callbacks**: would require a callback interface or reactive streams; the `DownloadResult.Success` record reports final byte count and elapsed time.
 - **Bandwidth throttling**: reduce `parallelism` and `chunkSize`.
 - **HTTP/2 multiplexing**: `HttpClient` negotiates HTTP/2 automatically when the server supports it.
 - **Multi-source / torrent-style**: each download targets one URI.
-- **CLI**, **GUI**, **resume/checkpoint**, **authentication**, **metrics framework**.
-
-## What I would add with one more day
-
-1. **`If-Range` on each chunk GET**: wire `HeadResponse.etag()` into `JdkHttpAdapter.get()` when a range is requested; handle `200` fallback as a typed `RESOURCE_CHANGED` error.
-2. **Bandwidth measurement**: track bytes/second per chunk so the `Success` result can report effective throughput.
+- **GUI**, **authentication**, **metrics framework**.
+- **Resume across `chunkSize` changes**: the manifest invalidates; fail-fast wins over reconciliation.

@@ -24,7 +24,7 @@ class FileAssemblerTest {
         byte[] data = new byte[]{1, 2, 3, 4, 5, 6, 7, 8};
         Path dest = tmp.resolve("output.bin");
 
-        try (FileAssembler asm = new FileAssembler(dest)) {
+        try (FileAssembler asm = new FileAssembler(dest, false)) {
             ChunkSink sink = asm.sinkAt(0);
             sink.write(ByteBuffer.wrap(data));
             asm.commit();
@@ -39,7 +39,7 @@ class FileAssemblerTest {
         Path dest = tmp.resolve("out.bin");
         Path[] temp = new Path[1];
 
-        try (FileAssembler asm = new FileAssembler(dest)) {
+        try (FileAssembler asm = new FileAssembler(dest, false)) {
             temp[0] = asm.tempFile();
             asm.sinkAt(0).write(ByteBuffer.wrap(new byte[]{42}));
             asm.commit();
@@ -54,7 +54,7 @@ class FileAssemblerTest {
         Path dest = tmp.resolve("out.bin");
         Path[] temp = new Path[1];
 
-        try (FileAssembler asm = new FileAssembler(dest)) {
+        try (FileAssembler asm = new FileAssembler(dest, false)) {
             temp[0] = asm.tempFile();
             asm.sinkAt(0).write(ByteBuffer.wrap(new byte[]{1, 2, 3}));
             asm.abort();
@@ -69,7 +69,7 @@ class FileAssemblerTest {
         Path dest = tmp.resolve("out.bin");
         Path[] temp = new Path[1];
 
-        try (FileAssembler asm = new FileAssembler(dest)) {
+        try (FileAssembler asm = new FileAssembler(dest, false)) {
             temp[0] = asm.tempFile();
             // intentionally NOT committing
         }
@@ -84,7 +84,7 @@ class FileAssemblerTest {
         byte[] b = "WORLD".getBytes();
         Path dest = tmp.resolve("out.bin");
 
-        try (FileAssembler asm = new FileAssembler(dest)) {
+        try (FileAssembler asm = new FileAssembler(dest, false)) {
             // write chunks out of order to prove positional writes work
             asm.sinkAt(a.length).write(ByteBuffer.wrap(b));
             asm.sinkAt(0).write(ByteBuffer.wrap(a));
@@ -102,7 +102,7 @@ class FileAssemblerTest {
         for (int i = 0; i < full.length; i++) full[i] = (byte) (i & 0xFF);
 
         Path dest = tmp.resolve("parallel.bin");
-        try (FileAssembler asm = new FileAssembler(dest)) {
+        try (FileAssembler asm = new FileAssembler(dest, false)) {
             try (ExecutorService ex = Executors.newVirtualThreadPerTaskExecutor()) {
                 for (int i = 0; i < chunks; i++) {
                     final int idx = i;
@@ -126,7 +126,7 @@ class FileAssemblerTest {
     @Test
     void chunkSinkAcceptThrowsUncheckedOnIo() throws Exception {
         Path dest = tmp.resolve("out.bin");
-        try (FileAssembler asm = new FileAssembler(dest)) {
+        try (FileAssembler asm = new FileAssembler(dest, false)) {
             ChunkSink sink = asm.sinkAt(0);
             // close the channel underneath to provoke an IOException
             asm.abort(); // closes and deletes
@@ -139,7 +139,7 @@ class FileAssemblerTest {
     @Test
     void commitAfterAbortThrows() throws Exception {
         Path dest = tmp.resolve("out.bin");
-        FileAssembler asm = new FileAssembler(dest);
+        FileAssembler asm = new FileAssembler(dest, false);
         asm.abort();
         assertThatIllegalStateException().isThrownBy(asm::commit);
     }
@@ -152,7 +152,7 @@ class FileAssemblerTest {
 
         int chunkSize = 512 * 1024; // 512 KiB
         Path dest = tmp.resolve("big.bin");
-        try (FileAssembler asm = new FileAssembler(dest)) {
+        try (FileAssembler asm = new FileAssembler(dest, false)) {
             try (ExecutorService ex = Executors.newVirtualThreadPerTaskExecutor()) {
                 for (long offset = 0; offset < data.length; offset += chunkSize) {
                     final long off = offset;

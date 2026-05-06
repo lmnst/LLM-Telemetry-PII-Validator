@@ -129,17 +129,17 @@ class DownloaderUnitTest {
         HttpAdapter mismatchedRange = new HttpAdapter() {
             @Override
             public HeadResponse head(URI uri) {
-                return new HeadResponse(200, data.length, true, "\"etag\"");
+                return new HeadResponse(200, data.length, true, "\"etag\"", null);
             }
             @Override
-            public GetResponse get(URI uri, ByteRange range,
+            public GetResponse get(URI uri, ByteRange range, String ifRange,
                     Consumer<ByteBuffer> sink, CancelToken cancel) {
                 if (range == null) {
                     sink.accept(ByteBuffer.wrap(data));
-                    return new GetResponse(200, data.length, null);
+                    return new GetResponse(200, data.length, null, false);
                 }
                 sink.accept(ByteBuffer.wrap(data, (int) range.offset(), (int) range.length()));
-                return new GetResponse(206, range.length(), "bytes 0-0/" + data.length);
+                return new GetResponse(206, range.length(), "bytes 0-0/" + data.length, false);
             }
         };
 
@@ -172,19 +172,19 @@ class DownloaderUnitTest {
         HttpAdapter truncatedBody = new HttpAdapter() {
             @Override
             public HeadResponse head(URI uri) {
-                return new HeadResponse(200, data.length, true, "\"etag\"");
+                return new HeadResponse(200, data.length, true, "\"etag\"", null);
             }
             @Override
-            public GetResponse get(URI uri, ByteRange range,
+            public GetResponse get(URI uri, ByteRange range, String ifRange,
                     Consumer<ByteBuffer> sink, CancelToken cancel) {
                 if (range == null) {
                     sink.accept(ByteBuffer.wrap(data));
-                    return new GetResponse(200, data.length, null);
+                    return new GetResponse(200, data.length, null, false);
                 }
                 int half = (int) range.length() / 2;
                 sink.accept(ByteBuffer.wrap(data, (int) range.offset(), half));
                 String cr = "bytes " + range.offset() + "-" + range.lastByte() + "/" + data.length;
-                return new GetResponse(206, half, cr);
+                return new GetResponse(206, half, cr, false);
             }
         };
 
@@ -370,10 +370,10 @@ class DownloaderUnitTest {
             @Override
             public HeadResponse head(URI uri) {
                 // No Accept-Ranges → single-stream → exactly one GET call
-                return new HeadResponse(200, data.length, false, null);
+                return new HeadResponse(200, data.length, false, null, null);
             }
             @Override
-            public GetResponse get(URI uri, ByteRange range,
+            public GetResponse get(URI uri, ByteRange range, String ifRange,
                     Consumer<ByteBuffer> sink, CancelToken cancel)
                     throws IOException, InterruptedException {
                 getEntered.countDown(); // notify test that GET has started
@@ -529,9 +529,9 @@ class DownloaderUnitTest {
 
         HttpAdapter failHead = new HttpAdapter() {
             @Override public HeadResponse head(java.net.URI uri) {
-                return new HeadResponse(404, -1, false, null);
+                return new HeadResponse(404, -1, false, null, null);
             }
-            @Override public GetResponse get(java.net.URI uri, ByteRange range,
+            @Override public GetResponse get(java.net.URI uri, ByteRange range, String ifRange,
                     java.util.function.Consumer<java.nio.ByteBuffer> sink, CancelToken cancel) {
                 throw new UnsupportedOperationException();
             }

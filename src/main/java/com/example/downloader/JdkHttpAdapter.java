@@ -12,7 +12,7 @@ import java.util.function.Consumer;
 
 final class JdkHttpAdapter implements HttpAdapter, AutoCloseable {
 
-    private static final int READ_BUFFER_SIZE = 64 * 1024; // 64 KiB
+    private static final int READ_BUFFER_SIZE = 64 * 1024;
 
     private final HttpClient client;
     private final Duration requestTimeout;
@@ -46,12 +46,14 @@ final class JdkHttpAdapter implements HttpAdapter, AutoCloseable {
                 .map(v -> v.equalsIgnoreCase("bytes"))
                 .orElse(false);
         String etag = resp.headers().firstValue("ETag").orElse(null);
+        String lastModified = resp.headers().firstValue("Last-Modified").orElse(null);
 
-        return new HeadResponse(resp.statusCode(), contentLength, acceptRanges, etag);
+        return new HeadResponse(resp.statusCode(), contentLength, acceptRanges, etag, lastModified);
     }
 
     @Override
-    public GetResponse get(URI uri, ByteRange range, Consumer<ByteBuffer> sink, CancelToken cancel)
+    public GetResponse get(URI uri, ByteRange range, String ifRange,
+                           Consumer<ByteBuffer> sink, CancelToken cancel)
             throws IOException, InterruptedException {
 
         HttpRequest.Builder reqBuilder = HttpRequest.newBuilder(uri)
@@ -61,6 +63,9 @@ final class JdkHttpAdapter implements HttpAdapter, AutoCloseable {
 
         if (range != null) {
             reqBuilder.header("Range", range.httpHeaderValue());
+        }
+        if (ifRange != null) {
+            reqBuilder.header("If-Range", ifRange);
         }
 
         HttpResponse<InputStream> resp;
@@ -83,7 +88,8 @@ final class JdkHttpAdapter implements HttpAdapter, AutoCloseable {
             }
         }
 
-        return new GetResponse(resp.statusCode(), bytesWritten, contentRange);
+        boolean ifRangeMismatch = ifRange != null && resp.statusCode() == 200;
+        return new GetResponse(resp.statusCode(), bytesWritten, contentRange, ifRangeMismatch);
     }
 
     @Override

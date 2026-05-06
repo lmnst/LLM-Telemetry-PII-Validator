@@ -50,6 +50,34 @@ $ ./gradlew run --args="--url http://localhost:8080/test.bin --out /tmp/x.bin \
 
 Run `./gradlew run --args="--help"` for the full flag and exit-code reference.
 
+## Resumability
+
+Pass `--resume` (library: `DownloaderOptions.resumeStrategy(RESUME_IF_VALID)`) and
+the downloader will:
+
+- record progress in a sidecar `<dest>.part.json` after every chunk completes
+  (atomic flush: write `.tmp`, fsync, rename);
+- on a subsequent run, validate that sidecar against the server's `HEAD`
+  (URL, ETag — or `Last-Modified` when no ETag — `Content-Length`, and chunk
+  size). Match: replay only the missing chunks. Mismatch: fail fast with exit
+  `6` / `RESOURCE_CHANGED`, leaving the sidecar in place so the caller can
+  decide whether to delete it and retry from scratch.
+- send `If-Range` with each ranged GET in resume mode — a `200` response on
+  a ranged request now means "the validator no longer matches", surfaced as
+  `RESOURCE_CHANGED` rather than silently merging old and new bytes.
+
+```bash
+# First attempt is interrupted (Ctrl-C, network drop, etc.)
+./gradlew run --args="--url https://example.com/big.bin --out /tmp/big.bin --resume"
+
+# Re-run with the same flag — only missing chunks are re-fetched:
+./gradlew run --args="--url https://example.com/big.bin --out /tmp/big.bin --resume"
+```
+
+`FRESH` mode (the default) ignores any existing `.part` / `.part.json` files.
+Single-stream downloads (servers without `Accept-Ranges`) cannot be resumed and
+ignore the flag.
+
 ## Usage
 
 ```java
@@ -103,10 +131,11 @@ try (Downloader downloader = new Downloader(DownloaderOptions.defaults())) {
 | `206` with mismatched `Content-Range` | Detected and rejected before commit |
 | Transient errors (408/429/5xx, `IOException`, timeout) | Exponential backoff with full jitter; honours `Retry-After` |
 | Non-retryable errors (400/401/403/404/…) | Immediate typed failure |
-| Cancellation | Cooperative: observed between buffer reads and before each chunk attempt; temp file deleted; destination untouched; no socket-level abort |
-| Any failure | `.part` temp file deleted; destination never written or corrupted |
+| Cancellation | Cooperative: observed between buffer reads and before each chunk attempt; in FRESH mode `.part` deleted, in `RESUME_IF_VALID` mode preserved; destination untouched |
+| Any failure | FRESH: `.part` and `.part.json` deleted. RESUME_IF_VALID: both preserved so the user can retry `--resume`. Destination never written or corrupted in either mode. |
 | Destination already exists | Success replaces it atomically; failure leaves original intact |
 | Destination is a directory | Immediate typed `IO_ERROR` |
+| Resource changed mid-resume (ETag, Content-Length, chunk size, or URL drift) | Detected via `If-Range` and manifest validation; fails fast with `RESOURCE_CHANGED` (exit 6); sidecar preserved |
 
 ## Default options
 
@@ -124,14 +153,16 @@ try (Downloader downloader = new Downloader(DownloaderOptions.defaults())) {
 ```
 Downloader            — download(URI, Path) / downloadAsync(URI, Path) / close()
 DownloaderOptions     — record + Builder; expectedDigest(Algorithm, byte[])
+                                          ; resumeStrategy(ResumeStrategy)
 DownloadResult        — sealed: Success | Failure; Success.sha256() : Optional<byte[]>
 DownloadError         — enum: HTTP_ERROR | IO_ERROR | SIZE_MISMATCH | INTEGRITY_FAILURE
-                              | CANCELLED | TIMEOUT | RANGES_NOT_SUPPORTED
+                              | RESOURCE_CHANGED | CANCELLED | TIMEOUT | RANGES_NOT_SUPPORTED
 DownloadHandle        — join() / joinWithTimeout(Duration) / cancel() / state()
 HttpAdapter           — inject a custom adapter (e.g. for tests)
 HttpStatusException   — Failure.cause() for HTTP_ERROR; carries statusCode()
 Algorithm             — enum: SHA_256 (single member; extensible)
 ExpectedDigest        — record (algorithm, bytes); validated in compact ctor
+ResumeStrategy        — enum: FRESH (default) | RESUME_IF_VALID
 cli.Main              — entry point for ./gradlew run
 ```
 

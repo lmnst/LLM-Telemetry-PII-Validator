@@ -10,7 +10,8 @@ public record DownloaderOptions(
         int maxRetriesPerChunk,
         Duration retryBaseDelay,
         String userAgent,
-        ExpectedDigest expectedDigest
+        ExpectedDigest expectedDigest,
+        ResumeStrategy resumeStrategy
 ) {
     public DownloaderOptions {
         if (chunkSize <= 0) throw new IllegalArgumentException("chunkSize must be > 0, got: " + chunkSize);
@@ -25,6 +26,7 @@ public record DownloaderOptions(
             throw new IllegalArgumentException("retryBaseDelay must be non-negative");
         if (userAgent == null || userAgent.isBlank())
             throw new IllegalArgumentException("userAgent must not be blank");
+        if (resumeStrategy == null) throw new IllegalArgumentException("resumeStrategy must not be null");
         // expectedDigest may be null (no integrity check requested)
     }
 
@@ -43,14 +45,16 @@ public record DownloaderOptions(
         private Duration retryBaseDelay = Duration.ofMillis(200);
         private String userAgent = "parallel-downloader/1.0 (+java.net.http)";
         private ExpectedDigest expectedDigest = null;
+        private ResumeStrategy resumeStrategy = ResumeStrategy.FRESH;
 
-        public Builder chunkSize(long v)            { this.chunkSize = v; return this; }
-        public Builder parallelism(int v)           { this.parallelism = v; return this; }
-        public Builder connectTimeout(Duration v)   { this.connectTimeout = v; return this; }
-        public Builder requestTimeout(Duration v)   { this.requestTimeout = v; return this; }
-        public Builder maxRetriesPerChunk(int v)    { this.maxRetriesPerChunk = v; return this; }
-        public Builder retryBaseDelay(Duration v)   { this.retryBaseDelay = v; return this; }
-        public Builder userAgent(String v)          { this.userAgent = v; return this; }
+        public Builder chunkSize(long v)              { this.chunkSize = v; return this; }
+        public Builder parallelism(int v)             { this.parallelism = v; return this; }
+        public Builder connectTimeout(Duration v)     { this.connectTimeout = v; return this; }
+        public Builder requestTimeout(Duration v)     { this.requestTimeout = v; return this; }
+        public Builder maxRetriesPerChunk(int v)      { this.maxRetriesPerChunk = v; return this; }
+        public Builder retryBaseDelay(Duration v)     { this.retryBaseDelay = v; return this; }
+        public Builder userAgent(String v)            { this.userAgent = v; return this; }
+        public Builder resumeStrategy(ResumeStrategy v) { this.resumeStrategy = v; return this; }
 
         public Builder expectedDigest(Algorithm algorithm, byte[] bytes) {
             this.expectedDigest = new ExpectedDigest(algorithm, bytes);
@@ -60,7 +64,7 @@ public record DownloaderOptions(
         public DownloaderOptions build() {
             return new DownloaderOptions(chunkSize, parallelism, connectTimeout,
                     requestTimeout, maxRetriesPerChunk, retryBaseDelay, userAgent,
-                    expectedDigest);
+                    expectedDigest, resumeStrategy);
         }
     }
 }
