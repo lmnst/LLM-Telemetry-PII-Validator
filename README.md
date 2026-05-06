@@ -1,6 +1,6 @@
 # Parallel Range-GET File Downloader
 
-[![CI](https://github.com/lmnst/LLM-Telemetry-PII-Validator/actions/workflows/ci.yml/badge.svg)](https://github.com/lmnst/LLM-Telemetry-PII-Validator/actions/workflows/ci.yml)
+[![CI](https://github.com/lmnst/java-parallel-downloader/actions/workflows/ci.yml/badge.svg)](https://github.com/lmnst/java-parallel-downloader/actions/workflows/ci.yml)
 ![Java](https://img.shields.io/badge/Java-21+-orange?logo=openjdk&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 

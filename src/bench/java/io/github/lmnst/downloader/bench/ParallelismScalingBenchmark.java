@@ -53,7 +53,7 @@ public class ParallelismScalingBenchmark {
     private static final long FILE_SIZE = 4L * 1024 * 1024;
     private static final long CHUNK_SIZE = 256L * 1024;
 
-    @Param({"1", "4", "8"})
+    @Param({"1", "4", "8", "16"})
     public int parallelism;
 
     @Param({"0", "5"})
