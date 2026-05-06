@@ -1,0 +1,277 @@
+package com.example.downloader.cli;
+
+import com.example.downloader.Downloader;
+import com.example.downloader.DownloaderOptions;
+import com.example.downloader.DownloadResult;
+import com.example.downloader.HttpStatusException;
+
+import java.io.PrintStream;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Path;
+import java.time.Duration;
+
+public final class Main {
+
+    static final int EXIT_SUCCESS          = 0;
+    static final int EXIT_GENERIC          = 1;
+    static final int EXIT_USAGE            = 2;
+    static final int EXIT_TRANSIENT        = 3;
+    static final int EXIT_INTEGRITY        = 4;
+    static final int EXIT_CANCELLED        = 5;
+    static final int EXIT_RESOURCE_CHANGED = 6;
+
+    private static final String USAGE = """
+            Usage: downloader --url <uri> --out <path> [options]
+
+            Required:
+              --url <uri>           Source URL to download.
+              --out <path>          Destination file path.
+
+            Options:
+              --chunk-size <size>   Chunk size; bare number = bytes; suffixes K, M, G, KiB, MiB, GiB
+                                    are 1024-based (e.g. 8M = 8MiB = 8388608). Default: 8 MiB.
+              --parallelism <int>   Maximum concurrent ranged GETs. Default: 8.
+              --report <text|json>  Output format. Default: text.
+              -h, --help            Show this help and exit.
+
+            Exit codes:
+              0  success
+              1  generic failure (e.g. HTTP 4xx, ranges-not-supported)
+              2  usage / argument error
+              3  transient / network failure (I/O, timeout, HTTP 5xx)
+              4  integrity failure (size mismatch)
+              5  cancelled
+              6  resource changed
+            """;
+
+    public static void main(String[] args) {
+        System.exit(run(args, System.out, System.err));
+    }
+
+    static int run(String[] args, PrintStream out, PrintStream err) {
+        Args parsed;
+        try {
+            parsed = Args.parse(args);
+        } catch (UsageException e) {
+            err.println("error: " + e.getMessage());
+            err.println();
+            err.print(USAGE);
+            return EXIT_USAGE;
+        }
+
+        if (parsed.help) {
+            out.print(USAGE);
+            return EXIT_SUCCESS;
+        }
+
+        DownloaderOptions opts = buildOptions(parsed);
+
+        try (Downloader downloader = new Downloader(opts)) {
+            DownloadResult result = downloader.download(parsed.url, parsed.out);
+            return report(result, parsed.report, out, err);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            err.println("interrupted");
+            return EXIT_CANCELLED;
+        }
+    }
+
+    // ── argument parsing ─────────────────────────────────────────────────────
+
+    private static final class Args {
+        URI url;
+        Path out;
+        Long chunkSize;
+        Integer parallelism;
+        Report report = Report.TEXT;
+        boolean help;
+
+        static Args parse(String[] argv) {
+            Args a = new Args();
+            for (int i = 0; i < argv.length; i++) {
+                String s = argv[i];
+                switch (s) {
+                    case "--help", "-h"  -> a.help = true;
+                    case "--url"         -> a.url = parseUri(value(argv, ++i, s));
+                    case "--out"         -> a.out = Path.of(value(argv, ++i, s));
+                    case "--chunk-size"  -> a.chunkSize = parseSize(value(argv, ++i, s));
+                    case "--parallelism" -> a.parallelism = parsePositiveInt(value(argv, ++i, s));
+                    case "--report"      -> a.report = parseReport(value(argv, ++i, s));
+                    default              -> throw new UsageException("unknown flag: " + s);
+                }
+            }
+            if (!a.help) {
+                if (a.url == null) throw new UsageException("missing required flag: --url");
+                if (a.out == null) throw new UsageException("missing required flag: --out");
+            }
+            return a;
+        }
+
+        private static String value(String[] argv, int idx, String flag) {
+            if (idx >= argv.length) throw new UsageException(flag + " requires a value");
+            return argv[idx];
+        }
+    }
+
+    enum Report { TEXT, JSON }
+
+    private static URI parseUri(String s) {
+        try {
+            URI u = new URI(s);
+            if (u.getScheme() == null) throw new UsageException("--url must include scheme: " + s);
+            return u;
+        } catch (URISyntaxException e) {
+            throw new UsageException("invalid --url: " + s);
+        }
+    }
+
+    private static int parsePositiveInt(String s) {
+        try {
+            int n = Integer.parseInt(s.trim());
+            if (n <= 0) throw new UsageException("must be > 0: " + s);
+            return n;
+        } catch (NumberFormatException e) {
+            throw new UsageException("invalid integer: " + s);
+        }
+    }
+
+    private static Report parseReport(String s) {
+        return switch (s.toLowerCase()) {
+            case "text" -> Report.TEXT;
+            case "json" -> Report.JSON;
+            default     -> throw new UsageException("--report must be 'text' or 'json', got: " + s);
+        };
+    }
+
+    static long parseSize(String raw) {
+        String s = raw.trim();
+        if (s.isEmpty()) throw new UsageException("--chunk-size empty");
+
+        long mult = 1L;
+        String num = s;
+
+        // Suffixes are 1024-based for both IEC (KiB/MiB/GiB) and bare (K/M/G).
+        // IEC checked first so "MiB" doesn't masquerade as "M".
+        String[][] suffixes = {
+                {"GiB", String.valueOf(1L << 30)},
+                {"MiB", String.valueOf(1L << 20)},
+                {"KiB", String.valueOf(1L << 10)},
+                {"G",   String.valueOf(1L << 30)},
+                {"M",   String.valueOf(1L << 20)},
+                {"K",   String.valueOf(1L << 10)},
+        };
+        for (String[] pair : suffixes) {
+            if (s.endsWith(pair[0])) {
+                mult = Long.parseLong(pair[1]);
+                num = s.substring(0, s.length() - pair[0].length()).trim();
+                break;
+            }
+        }
+
+        long base;
+        try {
+            base = Long.parseLong(num);
+        } catch (NumberFormatException e) {
+            throw new UsageException("invalid --chunk-size: " + raw);
+        }
+        if (base <= 0) throw new UsageException("--chunk-size must be > 0: " + raw);
+        if (mult > 1 && base > Long.MAX_VALUE / mult) {
+            throw new UsageException("--chunk-size overflows: " + raw);
+        }
+        return base * mult;
+    }
+
+    // ── options + reporting ──────────────────────────────────────────────────
+
+    private static DownloaderOptions buildOptions(Args a) {
+        DownloaderOptions.Builder b = DownloaderOptions.builder();
+        if (a.chunkSize != null) b.chunkSize(a.chunkSize);
+        if (a.parallelism != null) b.parallelism(a.parallelism);
+        return b.build();
+    }
+
+    private static int report(DownloadResult result, Report fmt, PrintStream out, PrintStream err) {
+        return switch (result) {
+            case DownloadResult.Success s -> {
+                if (fmt == Report.JSON) {
+                    out.println("{\"status\":\"success\""
+                            + ",\"file\":\"" + jsonEscape(s.file().toString()) + "\""
+                            + ",\"bytes\":" + s.bytes()
+                            + ",\"elapsedMs\":" + s.elapsed().toMillis()
+                            + ",\"chunks\":" + s.chunks()
+                            + "}");
+                } else {
+                    out.printf("Downloaded %d bytes in %s (%d chunks) -> %s%n",
+                            s.bytes(), formatDuration(s.elapsed()), s.chunks(), s.file());
+                }
+                yield EXIT_SUCCESS;
+            }
+            case DownloadResult.Failure f -> {
+                int code = exitCodeFor(f);
+                if (fmt == Report.JSON) {
+                    String causeMsg = f.cause() == null ? "" : nullSafe(f.cause().getMessage());
+                    out.println("{\"status\":\"failure\""
+                            + ",\"error\":\"" + f.error() + "\""
+                            + ",\"exitCode\":" + code
+                            + ",\"cause\":\"" + jsonEscape(causeMsg) + "\""
+                            + "}");
+                } else {
+                    err.println("download failed: " + f.error()
+                            + (f.cause() != null ? " - " + f.cause().getMessage() : ""));
+                }
+                yield code;
+            }
+        };
+    }
+
+    private static int exitCodeFor(DownloadResult.Failure f) {
+        return switch (f.error()) {
+            case HTTP_ERROR -> {
+                if (f.cause() instanceof HttpStatusException hse) {
+                    yield hse.statusCode() >= 500 ? EXIT_TRANSIENT : EXIT_GENERIC;
+                }
+                yield EXIT_GENERIC;
+            }
+            case IO_ERROR, TIMEOUT          -> EXIT_TRANSIENT;
+            case SIZE_MISMATCH              -> EXIT_INTEGRITY;
+            case CANCELLED                  -> EXIT_CANCELLED;
+            case RANGES_NOT_SUPPORTED       -> EXIT_GENERIC;
+        };
+    }
+
+    private static String nullSafe(String s) { return s == null ? "" : s; }
+
+    private static String jsonEscape(String s) {
+        StringBuilder b = new StringBuilder(s.length() + 8);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"'  -> b.append("\\\"");
+                case '\\' -> b.append("\\\\");
+                case '\b' -> b.append("\\b");
+                case '\f' -> b.append("\\f");
+                case '\n' -> b.append("\\n");
+                case '\r' -> b.append("\\r");
+                case '\t' -> b.append("\\t");
+                default -> {
+                    if (c < 0x20) b.append(String.format("\\u%04x", (int) c));
+                    else b.append(c);
+                }
+            }
+        }
+        return b.toString();
+    }
+
+    private static String formatDuration(Duration d) {
+        long ms = d.toMillis();
+        if (ms < 1000) return ms + " ms";
+        return String.format("%.2f s", ms / 1000.0);
+    }
+
+    private static final class UsageException extends RuntimeException {
+        UsageException(String m) { super(m); }
+    }
+
+    private Main() {}
+}

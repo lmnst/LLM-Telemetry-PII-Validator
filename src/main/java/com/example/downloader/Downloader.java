@@ -357,15 +357,7 @@ public final class Downloader implements AutoCloseable {
         return new DownloadResult.Failure(error, cause);
     }
 
-    // ── package-private exceptions ───────────────────────────────────────────
-
-    static final class HttpStatusException extends IOException {
-        final int statusCode;
-        HttpStatusException(int statusCode) {
-            super("HTTP " + statusCode);
-            this.statusCode = statusCode;
-        }
-    }
+    // ── package-private exception ────────────────────────────────────────────
 
     static final class SizeMismatchException extends IOException {
         SizeMismatchException(long expected, long actual) {

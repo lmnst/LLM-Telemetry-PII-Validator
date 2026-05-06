@@ -10,9 +10,35 @@ A Java 21 library that downloads large files in parallel using HTTP Range reques
 ## Quick start
 
 ```bash
-./gradlew test          # compile and run the full test suite (no Docker, no network)
-./gradlew test --info   # verbose output
+./gradlew test                     # fast unit + property + in-process integration tests (no Docker, no network)
+./gradlew test -PintegrationTests  # also run Docker-backed Testcontainers tests (requires a Docker host)
 ```
+
+## Quick demo
+
+The CLI downloads a file in parallel and prints a structured report.
+
+```bash
+# 1. Generate a 64 MiB random file
+mkdir -p /tmp/corpus && head -c $((64 * 1024 * 1024)) /dev/urandom > /tmp/corpus/test.bin
+
+# 2. Serve it from an Apache container
+docker run --rm -d -p 8080:80 -v /tmp/corpus:/usr/local/apache2/htdocs/ --name dl-httpd httpd:2.4
+
+# 3. Download it
+./gradlew run --args="--url http://localhost:8080/test.bin --out /tmp/downloaded.bin --report json"
+
+# 4. Tear down
+docker stop dl-httpd
+```
+
+Sample JSON output:
+
+```json
+{"status":"success","file":"/tmp/downloaded.bin","bytes":67108864,"elapsedMs":234,"chunks":8}
+```
+
+Run `./gradlew run --args="--help"` for the full flag and exit-code reference.
 
 ## Usage
 
@@ -86,12 +112,14 @@ try (Downloader downloader = new Downloader(DownloaderOptions.defaults())) {
 ## Public API
 
 ```
-Downloader          — download(URI, Path) / downloadAsync(URI, Path) / close()
-DownloaderOptions   — record + Builder
-DownloadResult      — sealed: Success | Failure
-DownloadError       — enum: HTTP_ERROR | IO_ERROR | SIZE_MISMATCH | CANCELLED | TIMEOUT | RANGES_NOT_SUPPORTED
-DownloadHandle      — join() / joinWithTimeout(Duration) / cancel() / state()
-HttpAdapter         — inject a custom adapter (e.g. for tests)
+Downloader            — download(URI, Path) / downloadAsync(URI, Path) / close()
+DownloaderOptions     — record + Builder
+DownloadResult        — sealed: Success | Failure
+DownloadError         — enum: HTTP_ERROR | IO_ERROR | SIZE_MISMATCH | CANCELLED | TIMEOUT | RANGES_NOT_SUPPORTED
+DownloadHandle        — join() / joinWithTimeout(Duration) / cancel() / state()
+HttpAdapter           — inject a custom adapter (e.g. for tests)
+HttpStatusException   — Failure.cause() for HTTP_ERROR; carries statusCode()
+cli.Main              — entry point for ./gradlew run
 ```
 
 ## Design

@@ -24,8 +24,9 @@ import static org.assertj.core.api.Assertions.*;
 /**
  * End-to-end integration tests using an in-process HTTP server.
  * No Docker required. Uses the real JdkHttpAdapter + HttpClient stack.
+ * For the Docker-backed counterpart see IntegrationDockerTest (@Tag("integration")).
  */
-class IntegrationTest {
+class IntegrationInProcessTest {
 
     private static final int FILE_SIZE = 4 * 1024 * 1024; // 4 MiB
     private static final byte[] FILE_DATA;
