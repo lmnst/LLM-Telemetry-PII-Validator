@@ -9,12 +9,12 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 
 /**
- * Manages the .part data file (and its .part.json manifest sidecar) used during
+ * Manages the .part data file (and its .part.meta manifest sidecar) used during
  * download assembly. The temp path is deterministic, <dest>.part, so a
  * RESUME_IF_VALID restart can re-open the same file and extend it.
  *
  * <ul>
- *   <li>Fresh mode: any existing .part / .part.json files are deleted up front;
+ *   <li>Fresh mode: any existing .part / .part.meta files are deleted up front;
  *       abort() also deletes them. Failure leaves no artifacts behind.
  *   <li>Resume mode: existing files are preserved at construction; abort()
  *       leaves both files in place so the caller can retry --resume.
@@ -83,7 +83,7 @@ final class FileAssembler implements Closeable {
 
     /**
      * Closes the underlying channel and (in fresh mode) deletes both the .part
-     * and .part.json files. In resume mode both files are preserved so the user
+     * and .part.meta files. In resume mode both files are preserved so the user
      * can retry the download with --resume. Idempotent.
      */
     void abort() {

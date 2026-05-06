@@ -14,7 +14,7 @@ import java.time.Duration;
  * @param retryBaseDelay      base delay for exponential backoff with full jitter
  * @param userAgent           value of the {@code User-Agent} header
  * @param expectedDigest      optional digest to verify against, or null
- * @param resumeStrategy      whether to reuse {@code .part}/{@code .part.json}
+ * @param resumeStrategy      whether to reuse {@code .part}/{@code .part.meta}
  * @param progressListener    receives {@link ProgressEvent}s; defaults to no-op
  */
 public record DownloaderOptions(

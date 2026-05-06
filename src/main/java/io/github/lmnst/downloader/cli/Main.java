@@ -46,7 +46,7 @@ public final class Main {
               --sha256 <hex>        Verify the download against this SHA-256 (64 hex chars).
                                     Mismatch fails with exit 4; destination is not written.
               --resume              Resume an interrupted download. Re-uses an existing
-                                    .part / .part.json sidecar if its recorded ETag,
+                                    .part / .part.meta sidecar if its recorded ETag,
                                     contentLength, and chunkSize all still match the
                                     server's HEAD response; mismatch fails with exit 6.
               --report <text|json>  Output format. Default: text.

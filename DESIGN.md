@@ -18,7 +18,7 @@ A Java 21 library plus thin CLI for parallel `Range`-GET file downloads, with:
   on success; never a partial destination on failure.
 - **Streaming SHA-256 verification** before the atomic move, corrupt files
   never reach the destination path.
-- **Resumable downloads** via a `<dest>.part.json` sidecar manifest
+- **Resumable downloads** via a `<dest>.part.meta` sidecar manifest
   (atomic flush after each chunk's successful write+verify) plus `If-Range`
   on every ranged GET in resume mode. Any validator drift (URL, ETag,
   Content-Length, chunk size) → fail-fast `RESOURCE_CHANGED`.
@@ -54,7 +54,7 @@ Downloader (AutoCloseable)
 ├── RangePlanner          → totalBytes + chunkSize → List<ByteRange>
 ├── FileAssembler         → <dest>.part lifecycle (open/write/fsync/atomic-move)
 │   └── ChunkSink         → positional FileChannel.write (thread-safe per JDK spec)
-├── Manifest              → <dest>.part.json sidecar (RESUME_IF_VALID only)
+├── Manifest              → <dest>.part.meta sidecar (RESUME_IF_VALID only)
 ├── JdkHttpAdapter        → java.net.http.HttpClient (HEAD + ranged GET + If-Range)
 ├── RetryPolicy           → attempt + Trigger → Optional<Duration> with jitter
 └── ProgressDispatcher    → single virtual thread drains a queue of events
@@ -95,14 +95,24 @@ servers that obviously support Range (e.g. an S3 endpoint). The cost is a
 serialisation of the first chunk's latency; the benefit is one fewer round
 trip and a single code path that handles `200`-on-ranged-GET correctly.
 
-### JSON sidecar manifest vs binary checkpoint format
+### Line-oriented `key=value` manifest vs JSON or binary
 
-The manifest is JSON, flat, human-readable, debuggable with `cat`. A
-binary format (e.g. fixed-offset bitmap + length-prefixed strings) would be
-faster to read/write and use less disk, but the manifest is rewritten
-≤ once per chunk (8 MiB default → ≤ 12.5 KB total writes per GiB
-downloaded) and is read only once per resume. Speed isn't the bottleneck;
-debuggability is. JSON wins.
+The manifest is a flat `key=value` text file, one field per line, values
+URL-encoded so that a literal newline or `=` inside an ETag cannot break
+the parser; the completed bitmap is hex. The earlier shape was a tiny
+hand-rolled JSON document parsed by a regex, which is a fragile match
+for a sidecar this project writes itself. A binary format (fixed-offset
+bitmap plus length-prefixed strings) would be faster to read and write
+and use less disk, but the manifest is rewritten at most once per chunk
+(8 MiB default, ~12.5 KB total writes per GiB downloaded) and read only
+once per resume. Speed is not the bottleneck; debuggability is. Plain
+`key=value` keeps the `cat`-friendly property of the JSON version while
+removing the regex parser, the quote-and-escape rules, and the reviewer
+question of "why hand-roll JSON when there is no JSON dependency on the
+runtime classpath?" The format is fenced by a `version` field; a
+breaking change bumps the integer (currently `2`) and an old reader
+fails fast with a precise message. The filename suffix changed from
+`.part.json` to `.part.meta` to match the new content.
 
 ### Chaos via property test, not case-by-case units
 
@@ -167,9 +177,9 @@ separately.
 
 ## Resumption state machine
 
-The sidecar `<dest>.part.json` records `version`, `url`, `etag`,
+The sidecar `<dest>.part.meta` records `version`, `url`, `etag`,
 `lastModified`, `contentLength`, `chunkSize`, and a hex-encoded `BitSet` of
-completed chunk indices. It is written atomically (`.part.json.tmp` →
+completed chunk indices. It is written atomically (`.part.meta.tmp` →
 `fsync` → rename) after each chunk's successful write+verify.
 
 ```
@@ -187,7 +197,7 @@ completed chunk indices. It is written atomically (`.part.json.tmp` →
               │                             │
               │              ┌──────────────┴──────────────┐
               │              ▼                             ▼
-              │    .part.json missing            .part.json present
+              │    .part.meta missing            .part.meta present
               │              │                             │
               │              │            ┌────────────────┴───────────────┐
               │              │            ▼                                ▼
@@ -196,12 +206,12 @@ completed chunk indices. It is written atomically (`.part.json.tmp` →
               │              │   contentLength, chunkSize)                 │
               │              │            │                                ▼
               │              │            │                    fail RESOURCE_CHANGED
-              │              │            │                    (preserve .part / .part.json
+              │              │            │                    (preserve .part / .part.meta
               │              │            │                     so caller can decide)
               │              │            │
               ▼              ▼            ▼
        delete any old   write fresh   reuse existing
-       .part / .part.json,  manifest    manifest;
+       .part / .part.meta,  manifest    manifest;
        create fresh       (empty       skip chunks
        empty .part        bitmap)      already in bitmap
               │              │            │
@@ -275,7 +285,7 @@ otherwise.
 stays on the same filesystem and `ATOMIC_MOVE` is available).
 
 - **Open**: `FileChannel.open(<dest>.part, WRITE | READ | CREATE)`. In
-  FRESH mode any existing `.part` and `.part.json` are deleted first; in
+  FRESH mode any existing `.part` and `.part.meta` are deleted first; in
   RESUME mode they are preserved so the existing partial can be extended.
 - **Write**: concurrent `FileChannel.write(buf, position)` at
   non-overlapping offsets (thread-safe per JDK spec).
@@ -283,7 +293,7 @@ stays on the same filesystem and `ATOMIC_MOVE` is available).
   `Files.move(temp, dest, ATOMIC_MOVE, REPLACE_EXISTING)`, then
   `Files.deleteIfExists(manifestFile)`.
 - **Abort**: channel close. In FRESH mode also deletes `.part` and
-  `.part.json`; in RESUME mode preserves them so the caller can retry
+  `.part.meta`; in RESUME mode preserves them so the caller can retry
   with `--resume`. Idempotent.
 
 ## Retry policy
@@ -346,8 +356,8 @@ downloader against it under 120 seeds and asserts:
 > 1. `DownloadResult.Success`, the destination file's SHA-256 matches
 >    the source corpus; nothing else.
 > 2. `DownloadResult.Failure` with a typed `DownloadError`, the
->    destination does not exist, and no `.part` / `.part.json` /
->    `.part.json.tmp` files linger on disk.
+>    destination does not exist, and no `.part` / `.part.meta` /
+>    `.part.meta.tmp` files linger on disk.
 
 A success with corrupted bytes, a failure with a half-written
 destination, or a failure that lingers `.part` artifacts in fresh mode

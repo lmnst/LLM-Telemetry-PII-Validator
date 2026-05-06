@@ -84,7 +84,7 @@ observe a wrong-bytes file under the right name, even transiently.
 
 ### Resumption fence
 
-In `RESUME_IF_VALID` mode, a `<dest>.part.json` sidecar manifest is
+In `RESUME_IF_VALID` mode, a `<dest>.part.meta` sidecar manifest is
 written and `fsync`ed after each chunk's successful write. It
 records URL, ETag (or `Last-Modified`), `Content-Length`, chunk
 size, and a hex bitmap of completed chunks. On retry, only missing

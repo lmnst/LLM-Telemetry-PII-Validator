@@ -5,6 +5,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -27,7 +28,7 @@ class ManifestTest {
         m.markComplete(2);
         m.markComplete(7);
 
-        Path p = tmp.resolve("dest.bin.part.json");
+        Path p = tmp.resolve("dest.bin.part.meta");
         m.writeAtomically(p);
 
         Manifest reread = Manifest.read(p);
@@ -49,12 +50,29 @@ class ManifestTest {
                 200, 1024L, true, null, null);
         Manifest m = Manifest.forNewDownload(url, head, 256L);
 
-        Path p = tmp.resolve("x.part.json");
+        Path p = tmp.resolve("x.part.meta");
         m.writeAtomically(p);
         Manifest reread = Manifest.read(p);
 
         assertThat(reread.etag).isNull();
         assertThat(reread.lastModified).isNull();
+    }
+
+    @Test
+    void roundtrip_handlesUrlWithReservedAndNonAsciiCharacters() throws Exception {
+        // A literal newline or '=' inside a value would have broken a naive
+        // parser; URL-encoding lets these round-trip cleanly.
+        URI url = URI.create("https://example.com/path%20with%20spaces/%E4%B8%AD?q=a%26b%3Dc");
+        HttpAdapter.HeadResponse head = new HttpAdapter.HeadResponse(
+                200, 1024L, true, "\"weird=etag\"\n with newline", null);
+        Manifest m = Manifest.forNewDownload(url, head, 256L);
+
+        Path p = tmp.resolve("weird.part.meta");
+        m.writeAtomically(p);
+        Manifest reread = Manifest.read(p);
+
+        assertThat(reread.url).isEqualTo(url);
+        assertThat(reread.etag).isEqualTo("\"weird=etag\"\n with newline");
     }
 
     @Test
@@ -64,7 +82,7 @@ class ManifestTest {
                 200, 1024L, true, "\"e\"", null);
         Manifest m = Manifest.forNewDownload(url, head, 256L);
 
-        Path p = tmp.resolve("x.part.json");
+        Path p = tmp.resolve("x.part.meta");
         m.writeAtomically(p);
 
         try (var stream = Files.list(tmp)) {
@@ -75,41 +93,53 @@ class ManifestTest {
     }
 
     @Test
-    void matchesHead_etagAndContentLengthAndChunkSize() throws Exception {
+    void onDisk_format_isHumanReadableKeyEqualsValue() throws Exception {
+        URI url = URI.create("https://example.com/file");
+        HttpAdapter.HeadResponse head = new HttpAdapter.HeadResponse(
+                200, 1024L, true, "\"e1\"", null);
+        Manifest m = Manifest.forNewDownload(url, head, 256L);
+        m.markComplete(0);
+
+        Path p = tmp.resolve("inspect.part.meta");
+        m.writeAtomically(p);
+
+        String text = Files.readString(p, StandardCharsets.UTF_8);
+        assertThat(text).startsWith("version=" + Manifest.CURRENT_VERSION);
+        assertThat(text).contains("contentLength=1024");
+        assertThat(text).contains("chunkSize=256");
+        assertThat(text).contains("completed=01");
+    }
+
+    @Test
+    void matchesHead_etagAndContentLengthAndChunkSize() {
         URI url = URI.create("https://example.com/x");
         HttpAdapter.HeadResponse h1 = new HttpAdapter.HeadResponse(
                 200, 1024L, true, "\"v1\"", null);
         Manifest m = Manifest.forNewDownload(url, h1, 256L);
 
-        // Same head, same chunk size → match
         assertThat(m.matchesHead(h1, 256L)).isTrue();
 
-        // Different ETag → no match
         HttpAdapter.HeadResponse h2 = new HttpAdapter.HeadResponse(
                 200, 1024L, true, "\"v2\"", null);
         assertThat(m.matchesHead(h2, 256L)).isFalse();
 
-        // Different contentLength → no match
         HttpAdapter.HeadResponse h3 = new HttpAdapter.HeadResponse(
                 200, 2048L, true, "\"v1\"", null);
         assertThat(m.matchesHead(h3, 256L)).isFalse();
 
-        // Different chunkSize → no match
         assertThat(m.matchesHead(h1, 512L)).isFalse();
     }
 
     @Test
-    void matchesHead_fallsBackToLastModifiedWhenEtagMissing() throws Exception {
+    void matchesHead_fallsBackToLastModifiedWhenEtagMissing() {
         URI url = URI.create("https://example.com/x");
         String lm = "Wed, 21 Oct 2015 07:28:00 GMT";
         HttpAdapter.HeadResponse h = new HttpAdapter.HeadResponse(
                 200, 1024L, true, null, lm);
         Manifest m = Manifest.forNewDownload(url, h, 256L);
 
-        // Same Last-Modified → match
         assertThat(m.matchesHead(h, 256L)).isTrue();
 
-        // Different Last-Modified → no match
         HttpAdapter.HeadResponse h2 = new HttpAdapter.HeadResponse(
                 200, 1024L, true, null, "Thu, 22 Oct 2015 07:28:00 GMT");
         assertThat(m.matchesHead(h2, 256L)).isFalse();
@@ -117,8 +147,16 @@ class ManifestTest {
 
     @Test
     void unsupportedVersion_rejectsRead() throws Exception {
-        Path p = tmp.resolve("future.part.json");
-        Files.writeString(p, "{\"version\": 99, \"url\": \"https://x\"}");
+        Path p = tmp.resolve("future.part.meta");
+        Files.writeString(p, """
+                version=99
+                url=https%3A%2F%2Fexample.com%2Fx
+                etag=
+                lastModified=
+                contentLength=1024
+                chunkSize=256
+                completed=
+                """);
 
         assertThatThrownBy(() -> Manifest.read(p))
                 .isInstanceOf(IOException.class)
@@ -126,7 +164,100 @@ class ManifestTest {
     }
 
     @Test
-    void totalChunks_computedFromContentLengthAndChunkSize() throws Exception {
+    void unknownKey_rejectsRead() throws Exception {
+        Path p = tmp.resolve("unknown.part.meta");
+        Files.writeString(p, """
+                version=2
+                url=https%3A%2F%2Fexample.com%2Fx
+                etag=
+                lastModified=
+                contentLength=1024
+                chunkSize=256
+                completed=
+                bonusKey=anything
+                """);
+
+        assertThatThrownBy(() -> Manifest.read(p))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("bonusKey");
+    }
+
+    @Test
+    void missingRequiredKey_rejectsRead() throws Exception {
+        Path p = tmp.resolve("missing.part.meta");
+        // missing chunkSize
+        Files.writeString(p, """
+                version=2
+                url=https%3A%2F%2Fexample.com%2Fx
+                etag=
+                lastModified=
+                contentLength=1024
+                completed=
+                """);
+
+        assertThatThrownBy(() -> Manifest.read(p))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("chunkSize");
+    }
+
+    @Test
+    void malformedHexInCompleted_rejectsRead() throws Exception {
+        Path p = tmp.resolve("badhex.part.meta");
+        Files.writeString(p, """
+                version=2
+                url=https%3A%2F%2Fexample.com%2Fx
+                etag=
+                lastModified=
+                contentLength=1024
+                chunkSize=256
+                completed=zz
+                """);
+
+        assertThatThrownBy(() -> Manifest.read(p))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("completed");
+    }
+
+    @Test
+    void blankLineMidFile_rejectsRead() throws Exception {
+        Path p = tmp.resolve("blank.part.meta");
+        Files.writeString(p, """
+                version=2
+                url=https%3A%2F%2Fexample.com%2Fx
+
+                etag=
+                lastModified=
+                contentLength=1024
+                chunkSize=256
+                completed=
+                """);
+
+        assertThatThrownBy(() -> Manifest.read(p))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("blank line");
+    }
+
+    @Test
+    void duplicateKey_rejectsRead() throws Exception {
+        Path p = tmp.resolve("dupe.part.meta");
+        Files.writeString(p, """
+                version=2
+                url=https%3A%2F%2Fexample.com%2Fx
+                etag=
+                etag=
+                lastModified=
+                contentLength=1024
+                chunkSize=256
+                completed=
+                """);
+
+        assertThatThrownBy(() -> Manifest.read(p))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("duplicate key");
+    }
+
+    @Test
+    void totalChunks_computedFromContentLengthAndChunkSize() {
         URI url = URI.create("https://example.com/x");
         HttpAdapter.HeadResponse h = new HttpAdapter.HeadResponse(
                 200, 1500L, true, "\"e\"", null);

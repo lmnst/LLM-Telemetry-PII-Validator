@@ -2,6 +2,8 @@ package io.github.lmnst.downloader;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -10,30 +12,46 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.BitSet;
-import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.Set;
 
 /**
- * Sidecar metadata for a partial download. Lives at <dest>.part.json next to
- * the <dest>.part data file. Updated atomically (write tmp + fsync + rename)
- * after each chunk completes its write and integrity check.
+ * Sidecar metadata for a partial download. Lives at {@code <dest>.part.meta}
+ * next to the {@code <dest>.part} data file. Updated atomically (write tmp,
+ * fsync, rename) after each chunk completes its write and integrity check.
  *
- * Read by RESUME_IF_VALID at the start of a download to decide whether to
- * resume; deleted on successful commit; preserved on failure so the user
- * can retry with --resume.
+ * <p>Read by {@link ResumeStrategy#RESUME_IF_VALID} at the start of a download
+ * to decide whether to resume; deleted on successful commit; preserved on
+ * failure so the user can retry with {@code --resume}.
+ *
+ * <p>The on-disk format is a line-oriented {@code key=value} stream. Keys
+ * appear in a fixed order for readability under {@code cat}; values are
+ * URL-encoded so a literal newline, equals sign, or non-ASCII character in
+ * the URL or validators cannot break the parser. The completed bitmap is
+ * hex because it is already a byte stream and round-trips through {@link
+ * HexFormat} faster than through a percent-encoder.
  */
 final class Manifest {
 
-    static final int CURRENT_VERSION = 1;
-    private static final String SUFFIX = ".part.json";
+    static final int CURRENT_VERSION = 2;
+    private static final String SUFFIX = ".part.meta";
 
-    // Matches `"key": <value>` where value is a JSON string, integer, or null.
-    private static final Pattern FIELD = Pattern.compile(
-            "\"(\\w+)\"\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\"|null|-?\\d+)");
+    private static final String K_VERSION         = "version";
+    private static final String K_URL             = "url";
+    private static final String K_ETAG            = "etag";
+    private static final String K_LAST_MODIFIED   = "lastModified";
+    private static final String K_CONTENT_LENGTH  = "contentLength";
+    private static final String K_CHUNK_SIZE      = "chunkSize";
+    private static final String K_COMPLETED       = "completed";
+
+    private static final Set<String> REQUIRED_KEYS = Set.of(
+            K_VERSION, K_URL, K_CONTENT_LENGTH, K_CHUNK_SIZE, K_COMPLETED);
+    private static final Set<String> RECOGNIZED_KEYS = Set.of(
+            K_VERSION, K_URL, K_ETAG, K_LAST_MODIFIED,
+            K_CONTENT_LENGTH, K_CHUNK_SIZE, K_COMPLETED);
 
     final int version;
     final URI url;
@@ -123,25 +141,26 @@ final class Manifest {
 
     static Manifest read(Path manifestPath) throws IOException {
         String content = Files.readString(manifestPath, StandardCharsets.UTF_8);
-        Map<String, String> tokens = new HashMap<>();
-        Matcher m = FIELD.matcher(content);
-        while (m.find()) tokens.put(m.group(1), m.group(2));
+        Map<String, String> tokens = parseLines(content);
 
-        String versionRaw = tokens.get("version");
-        if (versionRaw == null) throw new IOException("manifest missing 'version'");
-        int version = Integer.parseInt(versionRaw);
+        int version = parseIntField(tokens, K_VERSION);
         if (version != CURRENT_VERSION) {
             throw new IOException("unsupported manifest version " + version
                     + " (expected " + CURRENT_VERSION + ")");
         }
 
-        URI url = URI.create(unquote(required(tokens, "url")));
-        String etag = unquoteOrNull(tokens.get("etag"));
-        String lastModified = unquoteOrNull(tokens.get("lastModified"));
-        long contentLength = Long.parseLong(required(tokens, "contentLength"));
-        long chunkSize = Long.parseLong(required(tokens, "chunkSize"));
-        String completedHex = unquote(required(tokens, "completed"));
-        BitSet completed = BitSet.valueOf(HexFormat.of().parseHex(completedHex));
+        URI url;
+        try {
+            url = URI.create(decode(tokens.get(K_URL)));
+        } catch (IllegalArgumentException e) {
+            throw new IOException("manifest field '" + K_URL + "' is not a valid URI: "
+                    + e.getMessage());
+        }
+        String etag         = decodeOrNull(tokens.get(K_ETAG));
+        String lastModified = decodeOrNull(tokens.get(K_LAST_MODIFIED));
+        long contentLength  = parseLongField(tokens, K_CONTENT_LENGTH);
+        long chunkSize      = parseLongField(tokens, K_CHUNK_SIZE);
+        BitSet completed    = parseHexBitSet(tokens.get(K_COMPLETED));
 
         return new Manifest(url, etag, lastModified, contentLength, chunkSize, completed);
     }
@@ -149,74 +168,98 @@ final class Manifest {
     // ── serialization helpers ────────────────────────────────────────────────
 
     private String serialize() {
-        return "{\n"
-                + "  \"version\": " + version + ",\n"
-                + "  \"url\": " + jsonString(url.toString()) + ",\n"
-                + "  \"etag\": " + (etag == null ? "null" : jsonString(etag)) + ",\n"
-                + "  \"lastModified\": " + (lastModified == null ? "null" : jsonString(lastModified)) + ",\n"
-                + "  \"contentLength\": " + contentLength + ",\n"
-                + "  \"chunkSize\": " + chunkSize + ",\n"
-                + "  \"completed\": " + jsonString(HexFormat.of().formatHex(completed.toByteArray())) + "\n"
-                + "}\n";
-    }
-
-    private static String jsonString(String s) {
-        StringBuilder b = new StringBuilder(s.length() + 8).append('"');
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"'  -> b.append("\\\"");
-                case '\\' -> b.append("\\\\");
-                case '\n' -> b.append("\\n");
-                case '\r' -> b.append("\\r");
-                case '\t' -> b.append("\\t");
-                case '\b' -> b.append("\\b");
-                case '\f' -> b.append("\\f");
-                default -> {
-                    if (c < 0x20) b.append(String.format("\\u%04x", (int) c));
-                    else b.append(c);
-                }
-            }
-        }
-        return b.append('"').toString();
-    }
-
-    private static String required(Map<String, String> tokens, String key) throws IOException {
-        String v = tokens.get(key);
-        if (v == null) throw new IOException("manifest missing '" + key + "'");
-        return v;
-    }
-
-    private static String unquoteOrNull(String token) {
-        if (token == null || token.equals("null")) return null;
-        return unquote(token);
-    }
-
-    private static String unquote(String token) {
-        if (!token.startsWith("\"") || !token.endsWith("\"") || token.length() < 2) {
-            throw new IllegalArgumentException("expected JSON string: " + token);
-        }
-        String inner = token.substring(1, token.length() - 1);
-        StringBuilder sb = new StringBuilder(inner.length());
-        for (int i = 0; i < inner.length(); i++) {
-            char c = inner.charAt(i);
-            if (c == '\\' && i + 1 < inner.length()) {
-                char n = inner.charAt(++i);
-                switch (n) {
-                    case '"'  -> sb.append('"');
-                    case '\\' -> sb.append('\\');
-                    case '/'  -> sb.append('/');
-                    case 'n'  -> sb.append('\n');
-                    case 'r'  -> sb.append('\r');
-                    case 't'  -> sb.append('\t');
-                    case 'b'  -> sb.append('\b');
-                    case 'f'  -> sb.append('\f');
-                    default   -> sb.append(n);
-                }
-            } else {
-                sb.append(c);
-            }
-        }
+        StringBuilder sb = new StringBuilder(160);
+        sb.append(K_VERSION).append('=').append(version).append('\n');
+        sb.append(K_URL).append('=').append(encode(url.toString())).append('\n');
+        sb.append(K_ETAG).append('=').append(encodeOrEmpty(etag)).append('\n');
+        sb.append(K_LAST_MODIFIED).append('=').append(encodeOrEmpty(lastModified)).append('\n');
+        sb.append(K_CONTENT_LENGTH).append('=').append(contentLength).append('\n');
+        sb.append(K_CHUNK_SIZE).append('=').append(chunkSize).append('\n');
+        sb.append(K_COMPLETED).append('=')
+                .append(HexFormat.of().formatHex(completed.toByteArray())).append('\n');
         return sb.toString();
+    }
+
+    private static Map<String, String> parseLines(String content) throws IOException {
+        Map<String, String> tokens = new LinkedHashMap<>();
+        String[] lines = content.split("\n", -1);
+        // split with -1 keeps a trailing empty after a final '\n'; legitimate
+        // and accepted. Any blank line in the middle is rejected as garbage.
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (line.endsWith("\r")) line = line.substring(0, line.length() - 1);
+            if (line.isEmpty()) {
+                if (i == lines.length - 1) continue; // trailing newline
+                throw new IOException("manifest contains a blank line at line " + (i + 1));
+            }
+            int eq = line.indexOf('=');
+            if (eq < 0) {
+                throw new IOException("manifest line " + (i + 1)
+                        + " is missing '=': " + truncated(line));
+            }
+            String key = line.substring(0, eq);
+            String value = line.substring(eq + 1);
+            if (!RECOGNIZED_KEYS.contains(key)) {
+                throw new IOException("manifest contains unknown key: " + key);
+            }
+            if (tokens.put(key, value) != null) {
+                throw new IOException("manifest contains duplicate key: " + key);
+            }
+        }
+        for (String required : REQUIRED_KEYS) {
+            if (!tokens.containsKey(required)) {
+                throw new IOException("manifest is missing required key: " + required);
+            }
+        }
+        return tokens;
+    }
+
+    private static int parseIntField(Map<String, String> tokens, String key) throws IOException {
+        try {
+            return Integer.parseInt(tokens.get(key));
+        } catch (NumberFormatException e) {
+            throw new IOException("manifest field '" + key + "' is not an integer: "
+                    + tokens.get(key));
+        }
+    }
+
+    private static long parseLongField(Map<String, String> tokens, String key) throws IOException {
+        try {
+            return Long.parseLong(tokens.get(key));
+        } catch (NumberFormatException e) {
+            throw new IOException("manifest field '" + key + "' is not a long: "
+                    + tokens.get(key));
+        }
+    }
+
+    private static BitSet parseHexBitSet(String hex) throws IOException {
+        try {
+            byte[] bytes = HexFormat.of().parseHex(hex);
+            return BitSet.valueOf(bytes);
+        } catch (IllegalArgumentException e) {
+            throw new IOException("manifest field '" + K_COMPLETED
+                    + "' is not valid hex: " + e.getMessage());
+        }
+    }
+
+    private static String encode(String s) {
+        return URLEncoder.encode(s, StandardCharsets.UTF_8);
+    }
+
+    private static String encodeOrEmpty(String s) {
+        return s == null ? "" : encode(s);
+    }
+
+    private static String decode(String s) {
+        return URLDecoder.decode(s, StandardCharsets.UTF_8);
+    }
+
+    private static String decodeOrNull(String s) {
+        if (s == null || s.isEmpty()) return null;
+        return decode(s);
+    }
+
+    private static String truncated(String s) {
+        return s.length() > 60 ? s.substring(0, 60) + "..." : s;
     }
 }

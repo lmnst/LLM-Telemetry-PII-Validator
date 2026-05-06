@@ -62,7 +62,7 @@ Sample JSON output:
 | Transient errors (408/429/5xx, `IOException`, timeout) | Exponential backoff with full jitter; honours `Retry-After` |
 | Non-retryable errors (400/401/403/404/...) | Immediate typed failure |
 | Cancellation | Cooperative: observed between buffer reads and before each chunk attempt; FRESH deletes `.part`, RESUME preserves; destination untouched |
-| Any failure | FRESH: `.part` and `.part.json` deleted. RESUME: both preserved. Destination never written or corrupted in either mode. |
+| Any failure | FRESH: `.part` and `.part.meta` deleted. RESUME: both preserved. Destination never written or corrupted in either mode. |
 | Destination already exists | Success replaces it atomically; failure leaves original intact |
 | Destination is a directory | Immediate typed `IO_ERROR` |
 | Resource changed mid-resume | Detected via `If-Range` and manifest validation; fails fast with `RESOURCE_CHANGED` (exit 6); sidecar preserved |
@@ -158,7 +158,7 @@ into the final report's `chunkDetails` array.
 Pass `--resume` (library:
 `DownloaderOptions.resumeStrategy(RESUME_IF_VALID)`). After every
 chunk's successful write+verify, the downloader flushes a sidecar
-`<dest>.part.json` (write `.tmp`, fsync, rename) recording URL,
+`<dest>.part.meta` (write `.tmp`, fsync, rename) recording URL,
 ETag, Last-Modified, Content-Length, chunk size, and a hex bitmap of
 completed chunks. On restart, the sidecar is validated against a
 fresh `HEAD`: match replays only missing chunks; any drift in those
@@ -176,7 +176,7 @@ $DL --url https://example.com/big.bin --out /tmp/big.bin --resume
 ```
 
 `FRESH` mode (the default) ignores any existing `.part` /
-`.part.json` files. Single-stream downloads cannot be resumed and
+`.part.meta` files. Single-stream downloads cannot be resumed and
 ignore the flag.
 
 ## Integrity verification

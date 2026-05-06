@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  *   1. Success, the destination file SHA-256 matches the source corpus.
  *   2. Failure, the result carries a typed DownloadError, the destination
- *      does not exist, and no .part / .part.json files linger.
+ *      does not exist, and no .part / .part.meta files linger.
  *
  * No third state is acceptable: a Success with corrupted bytes, or a Failure
  * with leftover artifacts, is a real bug. When this test fails the seed is
@@ -91,7 +91,7 @@ class ChaosPropertyTest {
                     .withFailMessage("seed=%d: destination exists after failure", seed)
                     .doesNotExist();
             assertThat(noPartArtifacts(dest))
-                    .withFailMessage("seed=%d: .part / .part.json artifact lingered", seed)
+                    .withFailMessage("seed=%d: .part / .part.meta artifact lingered", seed)
                     .isTrue();
         }
     }
@@ -110,8 +110,8 @@ class ChaosPropertyTest {
         try (var s = Files.list(tmp)) {
             return s.noneMatch(p -> {
                 String n = p.getFileName().toString();
-                return n.endsWith(".part") || n.endsWith(".part.json")
-                        || n.endsWith(".part.json.tmp");
+                return n.endsWith(".part") || n.endsWith(".part.meta")
+                        || n.endsWith(".part.meta.tmp");
             });
         }
     }

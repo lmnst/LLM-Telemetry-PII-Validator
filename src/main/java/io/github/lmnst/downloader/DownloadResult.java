@@ -33,7 +33,7 @@ public sealed interface DownloadResult {
 
     /**
      * Failed download. The destination file does not exist; in FRESH mode
-     * any {@code .part} / {@code .part.json} artifacts have been deleted
+     * any {@code .part} / {@code .part.meta} artifacts have been deleted
      * (RESUME_IF_VALID preserves them).
      *
      * @param error typed error category
