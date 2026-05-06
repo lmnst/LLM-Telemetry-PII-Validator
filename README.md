@@ -1,5 +1,7 @@
 # Parallel Range-GET File Downloader
 
+[![CI](https://github.com/lmnst/LLM-Telemetry-PII-Validator/actions/workflows/ci.yml/badge.svg)](https://github.com/lmnst/LLM-Telemetry-PII-Validator/actions/workflows/ci.yml)
+
 A Java 21 library and CLI for parallel, resumable, integrity-checked HTTP file
 downloads. Designed as a data-ingestion primitive: arbitrary-sized files moved
 across imperfect networks, with strong correctness guarantees — every download
