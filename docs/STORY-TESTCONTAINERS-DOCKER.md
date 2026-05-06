@@ -130,3 +130,18 @@ integration tests actually fired and not merely passed the
 abort-quietly check. The slightly less cheap mitigation is to make
 the binding visible (slf4j-simple here) so the next strategy regression
 gets reported instead of swallowed.
+
+## Postscript: retiring the silent-skip pattern
+
+The fix above made the diagnostic visible but kept
+`Assumptions.assumeTrue(DockerClientFactory.isDockerAvailable())` as
+the gate. That left the brittleness in place: a future Testcontainers
+or Docker Engine version that breaks the probe would once again let
+"skipped" masquerade as "passed." A later pass replaced the probe
+with an explicit `RUN_DOCKER_IT` environment variable. When set to
+`1`, Docker absence throws an `IllegalStateException` from
+`@BeforeAll` and the test is reported as failed; CI now sets
+`RUN_DOCKER_IT=1` on its integration job. When unset, the test
+skips with a message that names the missing component and the env
+var the caller should set to make it mandatory. Either way the
+operator can tell from the run output whether the test fired.

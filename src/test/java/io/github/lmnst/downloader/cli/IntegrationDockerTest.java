@@ -25,8 +25,23 @@ import static org.assertj.core.api.Assertions.assertThat;
  * End-to-end test that drives the CLI against an httpd:2.4 container hosting a
  * generated test corpus. The destination file's SHA-256 must equal the corpus's.
  *
- * Skipped automatically when Docker is unavailable. Override the corpus size with
- * `-Ddownloader.it.size=<bytes>`; default is 32 MiB.
+ * <p>Run gating is explicit and two-stage. The class is tagged
+ * {@code @Tag("integration")}, so {@code ./gradlew test} excludes it entirely.
+ * {@code ./gradlew test -PintegrationTests} brings it back into the JUnit run
+ * set; the {@code RUN_DOCKER_IT} environment variable then decides what
+ * happens when Docker is absent:
+ *
+ * <ul>
+ *   <li>{@code RUN_DOCKER_IT=1}: the test must run. If no Docker daemon is
+ *       reachable the {@code @BeforeAll} throws {@link IllegalStateException}
+ *       and JUnit marks the test as failed, not skipped.
+ *   <li>otherwise: the test is skipped with an {@link Assumptions} abort
+ *       message that explicitly names the missing component, so a green
+ *       summary line is never indistinguishable from a real run.
+ * </ul>
+ *
+ * Override the corpus size with {@code -Ddownloader.it.size=<bytes>}; default
+ * is 32 MiB.
  */
 @Tag("integration")
 class IntegrationDockerTest {
@@ -42,9 +57,20 @@ class IntegrationDockerTest {
     @BeforeAll
     static void startContainer(@TempDir Path corpusDir)
             throws IOException, NoSuchAlgorithmException {
-        Assumptions.assumeTrue(
-                DockerClientFactory.instance().isDockerAvailable(),
-                "Docker not available; skipping IntegrationDockerTest");
+        boolean mustRun = "1".equals(System.getenv("RUN_DOCKER_IT"));
+        boolean dockerAvailable = isDockerAvailable();
+
+        if (mustRun && !dockerAvailable) {
+            throw new IllegalStateException(
+                    "RUN_DOCKER_IT=1 is set but no Docker daemon is reachable. "
+                  + "Start Docker Desktop or dockerd, or unset RUN_DOCKER_IT "
+                  + "to skip this test instead of failing it.");
+        }
+        if (!dockerAvailable) {
+            Assumptions.abort("Docker daemon not reachable from this environment; "
+                    + "skipping. Set RUN_DOCKER_IT=1 to make Docker mandatory and "
+                    + "fail the test when it is missing.");
+        }
 
         corpusFile = corpusDir.resolve("test.bin");
         expectedSha256 = generateCorpus(corpusFile, FILE_SIZE, SEED);
@@ -123,5 +149,18 @@ class IntegrationDockerTest {
     private static long sizeFromSystemProperty() {
         String v = System.getProperty("downloader.it.size");
         return v == null ? 32L * 1024 * 1024 : Long.parseLong(v);
+    }
+
+    /**
+     * Wraps the Testcontainers probe so a misconfigured client library cannot
+     * crash the gate. We treat any throw as 'Docker not available'; the gate
+     * above then either skips or fails depending on RUN_DOCKER_IT.
+     */
+    private static boolean isDockerAvailable() {
+        try {
+            return DockerClientFactory.instance().isDockerAvailable();
+        } catch (Throwable t) {
+            return false;
+        }
     }
 }
