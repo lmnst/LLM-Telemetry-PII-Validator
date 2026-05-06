@@ -86,7 +86,7 @@ class ResumeTest {
         }
         assertThat(Manifest.pathFor(dest)).exists();
 
-        // Run 2: etag "v2" (resource has changed) — adapter serves new data too
+        // Run 2: etag "v2" (resource has changed), adapter serves new data too
         byte[] newData = randomBytes(2 * 1024 * 1024, 99L);
         FakeHttpAdapter run2 = FakeHttpAdapter.builder(newData)
                 .etag("\"v2\"")
@@ -97,7 +97,7 @@ class ResumeTest {
             assertThat(((DownloadResult.Failure) r).error())
                     .isEqualTo(DownloadError.RESOURCE_CHANGED);
         }
-        // Adapter should not have been called for any GET — failure happens after HEAD
+        // Adapter should not have been called for any GET, failure happens after HEAD
         assertThat(run2.getCallCount()).isZero();
         // Manifest preserved so caller can decide to delete and retry FRESH
         assertThat(Manifest.pathFor(dest)).exists();
@@ -147,7 +147,7 @@ class ResumeTest {
         }
         assertThat(Manifest.pathFor(dest)).exists();
 
-        // Run 2 in FRESH mode (default) — should ignore existing files
+        // Run 2 in FRESH mode (default), should ignore existing files
         DownloaderOptions freshOpts = DownloaderOptions.builder()
                 .chunkSize(CHUNK_SIZE)
                 .parallelism(2)

@@ -8,15 +8,15 @@ A Java 21 library plus thin CLI for parallel `Range`-GET file downloads, with:
   so the configured `parallelism` is respected without scheduling overhead.
 - **A probe chunk at offset 0**, fetched synchronously before any other
   chunks fan out, to detect servers that advertise `Accept-Ranges: bytes` in
-  HEAD but return `200 + full body` on a ranged GET — fixing the otherwise
+  HEAD but return `200 + full body` on a ranged GET, fixing the otherwise
   silent corruption when N parallel writers each receive the entire body.
 - **Per-chunk `Content-Range` validation and byte-count truncation checks**
-  — protocol-level pre-conditions for commit; failure here always aborts the
+ , protocol-level pre-conditions for commit; failure here always aborts the
   download rather than triggering a retry.
 - **Atomic write semantics**: a deterministic `<dest>.part` temp file in the
   destination's directory; `force(true)` then `Files.move(..., ATOMIC_MOVE)`
   on success; never a partial destination on failure.
-- **Streaming SHA-256 verification** before the atomic move — corrupt files
+- **Streaming SHA-256 verification** before the atomic move, corrupt files
   never reach the destination path.
 - **Resumable downloads** via a `<dest>.part.json` sidecar manifest
   (atomic flush after each chunk's successful write+verify) plus `If-Range`
@@ -43,7 +43,7 @@ Virtual threads let each concurrent chunk GET block on I/O without consuming
 an OS thread. Creating one per in-flight chunk is idiomatic and cheap
 (≈ 200 bytes of heap per unmounted thread). A `Semaphore(parallelism)` caps
 the actual concurrent GETs at the configured limit while still using
-`newVirtualThreadPerTaskExecutor()` for scheduling — the simplest possible
+`newVirtualThreadPerTaskExecutor()` for scheduling, the simplest possible
 "bounded parallelism on cheap threads" composition.
 
 ## Architecture
@@ -79,8 +79,8 @@ mitigation is a synchronous probe chunk 0 before any parallel work runs:
 if the probe returns `200`, we treat it as the complete download and
 commit; no parallel writes ever happened, so corruption is impossible.
 
-The alternative — *streaming detection*, where the first bytes of the
-first concurrent chunk are inspected for evidence of a `200` response —
+The alternative (*streaming detection*, where the first bytes of the
+first concurrent chunk are inspected for evidence of a `200` response)
 adds protocol-aware byte sniffing into the chunk path and a synchronisation
 point to abort siblings. Probe-chunk-first is one extra synchronous round
 trip and a clean "no parallel work has run yet" precondition.
@@ -90,14 +90,14 @@ trip and a clean "no parallel work has run yet" precondition.
 A more elaborate design would issue an OPTIONS or zero-byte GET first to
 discover Range support without committing to writing data. The probe-chunk
 shape collapses discovery and the first useful byte transfer into one round
-trip — at the cost of always making the first chunk synchronous, even on
+trip, at the cost of always making the first chunk synchronous, even on
 servers that obviously support Range (e.g. an S3 endpoint). The cost is a
 serialisation of the first chunk's latency; the benefit is one fewer round
 trip and a single code path that handles `200`-on-ranged-GET correctly.
 
 ### JSON sidecar manifest vs binary checkpoint format
 
-The manifest is JSON — flat, human-readable, debuggable with `cat`. A
+The manifest is JSON, flat, human-readable, debuggable with `cat`. A
 binary format (e.g. fixed-offset bitmap + length-prefixed strings) would be
 faster to read/write and use less disk, but the manifest is rewritten
 ≤ once per chunk (8 MiB default → ≤ 12.5 KB total writes per GiB
@@ -106,13 +106,13 @@ debuggability is. JSON wins.
 
 ### Chaos via property test, not case-by-case units
 
-A unit test per fault class would be easy to write and easy to fail —
+A unit test per fault class would be easy to write and easy to fail:
 "503 on chunk 2 fails the right way" is a one-liner. But the headline
 invariant is about *combinations*: a 503 on chunk 0, a truncated body on
 chunk 4, a malformed `Content-Range` on chunk 7, all in the same run. 14
 fault classes × 8 chunks × per-call sampling ≈ 10⁹ shapes; a property
 test seeds the RNG and lets the harness explore. When it finds a bug,
-the seed in the failure message replays the exact sequence — strictly
+the seed in the failure message replays the exact sequence, strictly
 better than a hand-written reduction.
 
 ### Per-chunk fsync of manifest vs lazy flush
@@ -142,7 +142,7 @@ header (if present) is validated against the requested range:
 - `total` (if not `*`) must equal the `Content-Length` from HEAD
 
 Mismatch fails immediately with `IO_ERROR`; `.part` is deleted (in FRESH
-mode). A missing header is tolerated — RFC 9110 §14.4 does not require it
+mode). A missing header is tolerated, RFC 9110 §14.4 does not require it
 when the response covers the exact requested range, and some CDNs omit it.
 
 ## HEAD/GET consistency, `If-Range`, and resumption
@@ -151,7 +151,7 @@ In `RESUME_IF_VALID` mode the downloader threads the HEAD's `ETag` (or
 `Last-Modified` when no ETag is present) into the per-chunk GET as
 `If-Range`. A `206` means the validator still matches and the partial
 download is sound; a `200` on a ranged GET-with-`If-Range` means the
-server has replaced the resource — the adapter surfaces this as
+server has replaced the resource, the adapter surfaces this as
 `GetResponse.ifRangeMismatch()` and the downloader fails fast with
 `RESOURCE_CHANGED`.
 
@@ -161,7 +161,7 @@ chunk 0 has run, no parallel work has started, and the body is treated as
 the full file.
 
 The two semantics for a `200` on a ranged GET are distinguished entirely
-by whether `If-Range` was sent — the adapter knows this and reports it on
+by whether `If-Range` was sent, the adapter knows this and reports it on
 the `GetResponse`, so the Downloader does not have to track mode
 separately.
 
@@ -240,7 +240,7 @@ completed chunk indices. It is written atomically (`.part.json.tmp` →
 
 `FRESH` always wipes existing artifacts. `RESUME_IF_VALID` either replays
 the bitmap or fails fast with `RESOURCE_CHANGED`. There is no path that
-silently mixes old and new bytes — every transition is either ticked off
+silently mixes old and new bytes, every transition is either ticked off
 in the bitmap, fenced by `If-Range`, or terminated.
 
 Single-stream downloads (`!canParallel`) bypass the manifest entirely:
@@ -248,7 +248,7 @@ there is no checkpointable state, so resumption is a no-op even when
 requested.
 
 `ResumeStrategy` carries `@ApiStatus.Experimental` because the two-member
-enum is the smallest committed surface — a third value such as
+enum is the smallest committed surface, a third value such as
 `RESUME_OR_FRESH` (try resume; on validator drift fall back silently
 instead of returning `RESOURCE_CHANGED`) is plausible enough that callers
 should expect the enum to grow. The `ProgressEvent` records, by contrast,
@@ -260,12 +260,12 @@ duration), so they are not annotated.
 When `DownloaderOptions.expectedDigest(...)` is configured, the downloader
 streams the temp file through a `MessageDigest` after the last chunk
 completes and *before* `FileAssembler.commit()`. The read uses a 64 KiB
-buffer in a single pass — no double-buffering — so the cost scales
+buffer in a single pass (no double-buffering), so the cost scales
 linearly with file size and does not require holding the body in memory.
 On mismatch, `IntegrityException` is thrown, `asm.abort()` runs via the
 existing catch path, and the destination path is never touched. Whether
 or not an expected digest is supplied, `DownloadResult.Success` exposes
-`Optional<byte[]> sha256()` — populated when verification ran, empty
+`Optional<byte[]> sha256()`, populated when verification ran, empty
 otherwise.
 
 ## Atomic write strategy and failure cleanup
@@ -295,7 +295,7 @@ per-chunk retry loop, so a protocol violation fails the entire download
 immediately rather than triggering a retry. Future refactors should
 preserve this invariant.
 
-Delay formula: `random(0, min(30 s, baseDelay × 2^attempt))` — full
+Delay formula: `random(0, min(30 s, baseDelay × 2^attempt))`, full
 jitter prevents thundering-herd. Server-provided `Retry-After` on
 `429`/`503` overrides the formula.
 
@@ -307,7 +307,7 @@ before chunks fan out, and the per-chunk virtual threads after each
 successful write) `emit()` events into a `LinkedBlockingQueue`; the
 dispatcher loops `take()` → `listener.onProgress(event)`.
 
-The invariant — exactly one thread invokes the listener — means listener
+The invariant (exactly one thread invokes the listener) means listener
 implementations do not need any synchronisation, and that mutable state
 inside the listener (e.g. a running `bytesCompleted` counter, a list of
 per-chunk durations) is safe without locks. A throwing listener is caught;
@@ -317,8 +317,8 @@ default) short-circuits the dispatcher entirely.
 
 ## Chaos testing
 
-The downloader's correctness claims — "any failure leaves no artifact at
-the destination, and any success delivers the source bytes verbatim" —
+The downloader's correctness claims ("any failure leaves no artifact at
+the destination, and any success delivers the source bytes verbatim")
 are straightforward to prove for an individual error path with a hand-written
 test. What's harder is proving they hold under arbitrary mixtures of those
 errors across concurrent chunks. A single hand-written test for "503 on
@@ -334,7 +334,7 @@ downloader against it under 120 seeds and asserts:
 
 > **Invariant.** The download ends in exactly one of two states.
 >
-> 1. `DownloadResult.Success` — the destination file's SHA-256 matches
+> 1. `DownloadResult.Success`, the destination file's SHA-256 matches
 >    the source corpus; nothing else.
 > 2. `DownloadResult.Failure` with a typed `DownloadError`, the
 >    destination does not exist, and no `.part` / `.part.json` /
@@ -347,7 +347,7 @@ same seed reproduces the exact fault sequence.
 
 ### Fault classes
 
-- HTTP `408`, `429`, `500`, `502`, `503`, `504` (status-only — the
+- HTTP `408`, `429`, `500`, `502`, `503`, `504` (status-only, the
   downloader retries; on exhaustion the typed `HTTP_ERROR` failure path
   runs)
 - HTTP `200` on a ranged GET (the corruption hazard the probe chunk
@@ -359,7 +359,7 @@ same seed reproduces the exact fault sequence.
 - `IOException` mid-body (simulated socket reset; retried)
 - Slowloris (1 ms-per-byte, capped to 16 bytes)
 - Per-chunk delay jitter (sleep 0–50 ms before responding)
-- Pass-through (no fault — the success branch must dominate frequently
+- Pass-through (no fault, the success branch must dominate frequently
   enough that a property run isn't all failures)
 
 ### Why in-process
@@ -404,7 +404,7 @@ try-with-resources (Java 21 `AutoCloseable` support).
 - **GUI / TUI dashboard**: `--report json` is a structured output stream
   any external dashboard can consume.
 - **Authentication, request signing, S3-specific paths**: out of scope
-  for an ingest primitive — wire your own `HttpAdapter` if you need
+  for an ingest primitive, wire your own `HttpAdapter` if you need
   these.
 - **A logger framework**: `System.err` for the CLI is fine; the library
   proper takes a `ProgressListener` so the caller decides how (and

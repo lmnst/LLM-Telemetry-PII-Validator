@@ -10,7 +10,7 @@ import java.util.function.Consumer;
  * implementation wraps {@code java.net.http.HttpClient}; tests inject a
  * fake adapter to exercise edge cases (truncated bodies, malformed
  * {@code Content-Range}, mid-body socket resets) without standing up a real
- * server. Implementations need not be thread-safe at the request level —
+ * server. Implementations need not be thread-safe at the request level ,
  * the downloader serialises HEAD before issuing concurrent GETs, and each
  * GET is independent.
  */
@@ -31,7 +31,7 @@ public interface HttpAdapter {
      * {@code sink} in bounded buffers. Returns the HTTP status, actual bytes
      * written, the {@code Content-Range} header value (if any), and an
      * {@code ifRangeMismatch} flag set when {@code ifRange} was non-null AND
-     * the server returned a {@code 200} (the validator did not match — the
+     * the server returned a {@code 200} (the validator did not match, the
      * resource has changed).
      *
      * @param range   {@code null} to send no {@code Range} header (single-stream)

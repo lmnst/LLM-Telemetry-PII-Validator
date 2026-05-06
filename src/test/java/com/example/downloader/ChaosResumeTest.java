@@ -61,7 +61,7 @@ class ChaosResumeTest {
                     break;
                 }
             }
-            // Lucky pass-through run — clean up and try the next seed.
+            // Lucky pass-through run, clean up and try the next seed.
             Files.deleteIfExists(dest);
             Files.deleteIfExists(Manifest.pathFor(dest));
             Files.deleteIfExists(dest.resolveSibling(dest.getFileName() + ".part"));

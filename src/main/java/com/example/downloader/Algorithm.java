@@ -2,7 +2,7 @@ package com.example.downloader;
 
 /**
  * Hash algorithms supported by {@link ExpectedDigest}. Single-member by design
- * — adding a new algorithm requires only a new enum constant and a
+ *, adding a new algorithm requires only a new enum constant and a
  * {@code digestLengthBytes()} arm; consumers that pattern-match the enum
  * still compile.
  */

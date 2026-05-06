@@ -10,7 +10,7 @@ import java.nio.file.StandardOpenOption;
 
 /**
  * Manages the .part data file (and its .part.json manifest sidecar) used during
- * download assembly. The temp path is deterministic — <dest>.part — so a
+ * download assembly. The temp path is deterministic, <dest>.part, so a
  * RESUME_IF_VALID restart can re-open the same file and extend it.
  *
  * <ul>
@@ -50,7 +50,7 @@ final class FileAssembler implements Closeable {
         this.manifestFile = Manifest.pathFor(destination);
 
         if (!resumeMode) {
-            // FRESH: any prior partial is wiped — see ResumeStrategy javadoc.
+            // FRESH: any prior partial is wiped, see ResumeStrategy javadoc.
             Files.deleteIfExists(tempFile);
             Files.deleteIfExists(manifestFile);
         }

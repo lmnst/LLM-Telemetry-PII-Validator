@@ -28,7 +28,7 @@ public enum DownloadError {
     /**
      * In {@code RESUME_IF_VALID} mode, a manifest validator (URL, ETag,
      * Content-Length, chunk size) no longer matches the server's HEAD or
-     * an {@code If-Range} GET returned {@code 200} — the resource has changed.
+     * an {@code If-Range} GET returned {@code 200}, the resource has changed.
      */
     RESOURCE_CHANGED,
 

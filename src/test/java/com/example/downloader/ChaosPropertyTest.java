@@ -21,8 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Property test: for any seed in [0, 120), the downloader against a chaos
  * adapter ends up in exactly one of two states:
  *
- *   1. Success — the destination file SHA-256 matches the source corpus.
- *   2. Failure — the result carries a typed DownloadError, the destination
+ *   1. Success, the destination file SHA-256 matches the source corpus.
+ *   2. Failure, the result carries a typed DownloadError, the destination
  *      does not exist, and no .part / .part.json files linger.
  *
  * No third state is acceptable: a Success with corrupted bytes, or a Failure

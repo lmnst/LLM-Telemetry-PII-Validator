@@ -11,7 +11,7 @@ import java.util.List;
  * embed per-chunk attempts and durations alongside the final summary.
  *
  * Started supplies the announced totalBytes and chunkCount; Finished/Failed
- * are intentionally ignored here — the CLI uses the DownloadResult itself
+ * are intentionally ignored here, the CLI uses the DownloadResult itself
  * for those terminal values to avoid double-bookkeeping.
  */
 final class JsonAccumulator implements ProgressListener {

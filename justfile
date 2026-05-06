@@ -52,4 +52,4 @@ demo:
     ./gradlew run -q --args="--url http://localhost:8080/test.bin --out $OUT --sha256 $EXPECTED_SHA --report json"
 
     echo
-    echo "[demo] OK — download complete and SHA-256 verified."
+    echo "[demo] OK: download complete and SHA-256 verified."

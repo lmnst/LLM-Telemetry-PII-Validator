@@ -80,7 +80,7 @@ class ProgressTest {
 
     @Test
     void concurrencyStress_monotonicallyIncreasingTotalBytes() throws Exception {
-        // 32 chunks, 16 parallelism — exercise the dispatcher under concurrent emit().
+        // 32 chunks, 16 parallelism, exercise the dispatcher under concurrent emit().
         int chunkCount = 32;
         int chunkSize = 64 * 1024;
         byte[] data = randomBytes(chunkCount * chunkSize, 3L);
@@ -152,7 +152,7 @@ class ProgressTest {
     void noOpListener_isCheap_andDownloadStillWorks() throws Exception {
         byte[] data = randomBytes(1024, 5L);
         Path dest = tmp.resolve("out.bin");
-        // ProgressListener.NO_OP triggers the dispatcher's short-circuit — exercises the path.
+        // ProgressListener.NO_OP triggers the dispatcher's short-circuit, exercises the path.
         DownloaderOptions opts = DownloaderOptions.builder()
                 .progressListener(ProgressListener.NO_OP)
                 .build();

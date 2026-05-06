@@ -138,7 +138,7 @@ public final class Downloader implements AutoCloseable {
                 && head.contentLength() > 0
                 && options.parallelism() > 1;
 
-        // Resume only applies in parallel mode — single-stream has nothing to resume.
+        // Resume only applies in parallel mode, single-stream has nothing to resume.
         boolean resumeMode = options.resumeStrategy() == ResumeStrategy.RESUME_IF_VALID
                 && canParallel;
 
@@ -183,7 +183,7 @@ public final class Downloader implements AutoCloseable {
             asm.abort();
             return failure(DownloadError.IO_ERROR, e);
         } finally {
-            asm.close(); // safe — abort/commit already happened; close() is idempotent
+            asm.close(); // safe, abort/commit already happened; close() is idempotent
         }
     }
 
@@ -425,7 +425,7 @@ public final class Downloader implements AutoCloseable {
                 return resp;
 
             } catch (InterruptedException e) {
-                throw e; // cancellation — do not retry
+                throw e; // cancellation, do not retry
             } catch (IOException e) {
                 Optional<Duration> delay = retry.evaluate(attempt,
                         new RetryPolicy.Trigger.IoFailure(e));
@@ -438,7 +438,7 @@ public final class Downloader implements AutoCloseable {
     /**
      * Validates a 206 Content-Range header against the range we requested.
      * Missing header is tolerated (some servers omit it for single-range responses).
-     * A present but mismatched header always fails — silent offset corruption is not acceptable.
+     * A present but mismatched header always fails, silent offset corruption is not acceptable.
      */
     private static void validateContentRange(String header, ByteRange range, long expectedTotal)
             throws IOException {

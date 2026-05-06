@@ -5,7 +5,7 @@ import java.util.Random;
 /**
  * Probability distribution over the per-GET faults the chaos adapter can
  * apply. A {@link Fault} is sampled by drawing a uniform double and
- * walking the cumulative weights. Weights need not sum to 1.0 — they are
+ * walking the cumulative weights. Weights need not sum to 1.0, they are
  * normalized internally.
  */
 public final class FaultDistribution {

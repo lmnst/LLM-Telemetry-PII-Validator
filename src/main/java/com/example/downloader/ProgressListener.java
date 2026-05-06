@@ -22,7 +22,7 @@ public interface ProgressListener {
     void onProgress(ProgressEvent event);
 
     /**
-     * No-op listener — the default. The downloader recognises this instance
+     * No-op listener, the default. The downloader recognises this instance
      * specifically and skips the dispatcher thread + queue allocation entirely.
      */
     ProgressListener NO_OP = event -> {};

@@ -58,7 +58,7 @@ final class ProgressDispatcher implements AutoCloseable {
                 deliver(queue.take());
             }
         } catch (InterruptedException ignored) {
-            // Shutdown signal — fall through to drain.
+            // Shutdown signal, fall through to drain.
         }
         ProgressEvent remaining;
         while ((remaining = queue.poll()) != null) {

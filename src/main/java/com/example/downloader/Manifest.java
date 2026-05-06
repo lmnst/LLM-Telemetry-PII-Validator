@@ -87,7 +87,7 @@ final class Manifest {
     /**
      * Returns true iff this manifest's recorded validators match the current
      * HEAD response and the requested chunkSize. Any mismatch invalidates the
-     * partial download — the caller surfaces RESOURCE_CHANGED and (typically)
+     * partial download, the caller surfaces RESOURCE_CHANGED and (typically)
      * deletes the sidecar so a fresh download can proceed.
      */
     boolean matchesHead(HttpAdapter.HeadResponse head, long currentChunkSize) {

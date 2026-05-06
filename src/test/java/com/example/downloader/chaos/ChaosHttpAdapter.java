@@ -23,7 +23,7 @@ import java.util.function.Consumer;
  *
  * <h3>Past offenders (seeds that previously caught a bug)</h3>
  * <ul>
- *   <li>(none yet — record any here as the harness catches regressions)</li>
+ *   <li>(none yet, record any here as the harness catches regressions)</li>
  * </ul>
  */
 public final class ChaosHttpAdapter implements HttpAdapter {
@@ -80,7 +80,7 @@ public final class ChaosHttpAdapter implements HttpAdapter {
             case HTTP_504 -> { return statusOnly(504, ifRange); }
             case HTTP_200_ON_RANGED -> {
                 // Server ignores Range, returns full body. ifRangeMismatch tracks
-                // whether we sent If-Range — required for resume-mode RESOURCE_CHANGED
+                // whether we sent If-Range, required for resume-mode RESOURCE_CHANGED
                 // detection. In FRESH mode the probe-chunk fallback consumes this
                 // path; non-probe chunks reject 200 → HttpStatusException.
                 sink.accept(ByteBuffer.wrap(body).asReadOnlyBuffer());
@@ -170,7 +170,7 @@ public final class ChaosHttpAdapter implements HttpAdapter {
     }
 
     private GetResponse statusOnly(int status, String ifRange) {
-        // 200 with If-Range sent is "validator mismatch" — but our HTTP
+        // 200 with If-Range sent is "validator mismatch", but our HTTP
         // status-only faults are all error codes (4xx/5xx), not 200, so the flag
         // is always false.
         return new GetResponse(status, 0, null, false);
