@@ -406,7 +406,7 @@ public final class Downloader implements AutoCloseable {
                 HttpAdapter.GetResponse resp = http.get(uri, range, ifRange, sink, cancel);
 
                 if (isRetryableStatus(resp.status())) {
-                    Duration retryAfter = Duration.ZERO;
+                    Duration retryAfter = resp.retryAfter().orElse(Duration.ZERO);
                     Optional<Duration> delay = retry.evaluate(attempt,
                             new RetryPolicy.Trigger.HttpStatus(resp.status(), retryAfter));
                     if (delay.isEmpty()) throw new HttpStatusException(resp.status());

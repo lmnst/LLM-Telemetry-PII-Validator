@@ -3,6 +3,8 @@ package com.example.downloader;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
+import java.time.Duration;
+import java.util.Optional;
 import java.util.function.Consumer;
 
 /**
@@ -70,7 +72,25 @@ public interface HttpAdapter {
      * @param contentRangeHeader  value of the {@code Content-Range} header, or null
      * @param ifRangeMismatch     true iff {@code ifRange} was sent AND the
      *                            server returned 200 (validator no longer matches)
+     * @param retryAfter          parsed {@code Retry-After} hint when present
+     *                            (non-negative, clamped at 5 minutes); empty
+     *                            when the header was absent or unparseable
      */
     record GetResponse(int status, long bytesWritten, String contentRangeHeader,
-                       boolean ifRangeMismatch) {}
+                       boolean ifRangeMismatch, Optional<Duration> retryAfter) {
+
+        /**
+         * Convenience constructor for adapters that never surface a
+         * {@code Retry-After} hint.
+         *
+         * @param status              HTTP status code
+         * @param bytesWritten        bytes the adapter handed to the sink
+         * @param contentRangeHeader  value of the {@code Content-Range} header, or null
+         * @param ifRangeMismatch     true iff a stale {@code If-Range} was sent
+         */
+        public GetResponse(int status, long bytesWritten, String contentRangeHeader,
+                           boolean ifRangeMismatch) {
+            this(status, bytesWritten, contentRangeHeader, ifRangeMismatch, Optional.empty());
+        }
+    }
 }

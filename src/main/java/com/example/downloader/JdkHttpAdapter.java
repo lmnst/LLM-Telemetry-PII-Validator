@@ -8,11 +8,16 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.time.Duration;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.Optional;
 import java.util.function.Consumer;
 
 final class JdkHttpAdapter implements HttpAdapter, AutoCloseable {
 
     private static final int READ_BUFFER_SIZE = 64 * 1024;
+    private static final Duration RETRY_AFTER_CAP = Duration.ofMinutes(5);
 
     private final HttpClient client;
     private final Duration requestTimeout;
@@ -89,11 +94,46 @@ final class JdkHttpAdapter implements HttpAdapter, AutoCloseable {
         }
 
         boolean ifRangeMismatch = ifRange != null && resp.statusCode() == 200;
-        return new GetResponse(resp.statusCode(), bytesWritten, contentRange, ifRangeMismatch);
+        Optional<Duration> retryAfter = parseRetryAfter(
+                resp.headers().firstValue("Retry-After").orElse(null));
+        return new GetResponse(resp.statusCode(), bytesWritten, contentRange,
+                ifRangeMismatch, retryAfter);
     }
 
     @Override
     public void close() {
         client.close();
+    }
+
+    /**
+     * Parses an RFC 9110 {@code Retry-After} header value. Accepts both
+     * delta-seconds (a non-negative integer) and HTTP-date forms. The result
+     * is clamped to {@code [0, 5 minutes]} so a hostile or fat-fingered server
+     * cannot stall the client for an unbounded period. Returns {@link
+     * Optional#empty()} if the header is null, blank, malformed, or describes
+     * a time in the past.
+     */
+    static Optional<Duration> parseRetryAfter(String header) {
+        if (header == null) return Optional.empty();
+        String s = header.trim();
+        if (s.isEmpty()) return Optional.empty();
+
+        Duration parsed;
+        try {
+            long seconds = Long.parseLong(s);
+            if (seconds < 0) return Optional.empty();
+            parsed = Duration.ofSeconds(seconds);
+        } catch (NumberFormatException ignored) {
+            try {
+                ZonedDateTime when = ZonedDateTime.parse(s, DateTimeFormatter.RFC_1123_DATE_TIME);
+                parsed = Duration.between(ZonedDateTime.now(when.getZone()), when);
+            } catch (DateTimeParseException unparseable) {
+                return Optional.empty();
+            }
+        }
+
+        if (parsed.isNegative()) parsed = Duration.ZERO;
+        if (parsed.compareTo(RETRY_AFTER_CAP) > 0) parsed = RETRY_AFTER_CAP;
+        return Optional.of(parsed);
     }
 }

@@ -7,7 +7,8 @@ import com.example.downloader.HttpAdapter;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
+import java.time.Duration;
+import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -72,12 +73,12 @@ public final class ChaosHttpAdapter implements HttpAdapter {
             case PASS_THROUGH -> {
                 return passThrough(range, ifRange, sink);
             }
-            case HTTP_408 -> { return statusOnly(408, ifRange); }
-            case HTTP_429 -> { return statusOnly(429, ifRange); }
-            case HTTP_500 -> { return statusOnly(500, ifRange); }
-            case HTTP_502 -> { return statusOnly(502, ifRange); }
-            case HTTP_503 -> { return statusOnly(503, ifRange); }
-            case HTTP_504 -> { return statusOnly(504, ifRange); }
+            case HTTP_408 -> { return statusOnly(408, ifRange, false); }
+            case HTTP_429 -> { return statusOnly(429, ifRange, true); }
+            case HTTP_500 -> { return statusOnly(500, ifRange, false); }
+            case HTTP_502 -> { return statusOnly(502, ifRange, false); }
+            case HTTP_503 -> { return statusOnly(503, ifRange, true); }
+            case HTTP_504 -> { return statusOnly(504, ifRange, false); }
             case HTTP_200_ON_RANGED -> {
                 // Server ignores Range, returns full body. ifRangeMismatch tracks
                 // whether we sent If-Range, required for resume-mode RESOURCE_CHANGED
@@ -169,11 +170,21 @@ public final class ChaosHttpAdapter implements HttpAdapter {
         return new GetResponse(206, len, contentRange(range), false);
     }
 
-    private GetResponse statusOnly(int status, String ifRange) {
+    private GetResponse statusOnly(int status, String ifRange, boolean retryAfterEligible) {
         // 200 with If-Range sent is "validator mismatch", but our HTTP
         // status-only faults are all error codes (4xx/5xx), not 200, so the flag
-        // is always false.
-        return new GetResponse(status, 0, null, false);
+        // is always false. About a third of 429/503 responses include a tiny
+        // Retry-After hint so the JdkHttpAdapter parsing path is exercised
+        // under chaos without slowing the suite materially.
+        Optional<Duration> hint = Optional.empty();
+        if (retryAfterEligible) {
+            int roll;
+            synchronized (rng) {
+                roll = rng.nextInt(3);
+            }
+            if (roll == 0) hint = Optional.of(Duration.ofMillis(5));
+        }
+        return new GetResponse(status, 0, null, false, hint);
     }
 
     private String contentRange(ByteRange r) {

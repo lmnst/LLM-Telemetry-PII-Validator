@@ -191,6 +191,98 @@ class IntegrationInProcessTest {
     }
 
     @Test
+    void retryAfterHeader_isHonoredOn429() throws Exception {
+        AtomicInteger getCount = new AtomicInteger();
+        Path dest = tmp.resolve("out.bin");
+
+        server.createContext("/retry-after", ex -> {
+            if ("HEAD".equalsIgnoreCase(ex.getRequestMethod())) {
+                ex.getResponseHeaders().set("Content-Length", String.valueOf(FILE_DATA.length));
+                ex.sendResponseHeaders(200, -1);
+                ex.close();
+                return;
+            }
+            int call = getCount.getAndIncrement();
+            if (call == 0) {
+                ex.getResponseHeaders().set("Retry-After", "1");
+                ex.sendResponseHeaders(429, -1);
+                ex.close();
+            } else {
+                serveFullBody(ex, FILE_DATA);
+            }
+        });
+        server.start();
+        URI uri = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/retry-after");
+
+        DownloaderOptions opts = DownloaderOptions.builder()
+                .parallelism(1)
+                .maxRetriesPerChunk(2)
+                .retryBaseDelay(Duration.ofMillis(1)) // tiny backoff so the hint dominates
+                .connectTimeout(Duration.ofSeconds(5))
+                .requestTimeout(Duration.ofSeconds(10))
+                .build();
+
+        long startNanos = System.nanoTime();
+        try (Downloader dl = new Downloader(opts)) {
+            DownloadResult result = dl.download(uri, dest);
+            assertThat(result).isInstanceOf(DownloadResult.Success.class);
+        }
+        long elapsedMs = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
+
+        assertThat(elapsedMs)
+                .as("Retry-After: 1 should make the second attempt wait at least ~1 s")
+                .isGreaterThanOrEqualTo(900L);
+        assertThat(getCount.get()).isEqualTo(2);
+        assertThat(sha256(Files.readAllBytes(dest))).isEqualTo(FILE_HASH);
+    }
+
+    @Test
+    void retryAfterHeader_isIgnoredOnNonRetryable4xx() throws Exception {
+        AtomicInteger getCount = new AtomicInteger();
+        Path dest = tmp.resolve("out.bin");
+
+        server.createContext("/four-hundred", ex -> {
+            if ("HEAD".equalsIgnoreCase(ex.getRequestMethod())) {
+                ex.getResponseHeaders().set("Content-Length", String.valueOf(FILE_DATA.length));
+                ex.sendResponseHeaders(200, -1);
+                ex.close();
+                return;
+            }
+            getCount.incrementAndGet();
+            ex.getResponseHeaders().set("Retry-After", "60"); // would stall a full minute if honored
+            ex.sendResponseHeaders(400, -1);
+            ex.close();
+        });
+        server.start();
+        URI uri = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/four-hundred");
+
+        DownloaderOptions opts = DownloaderOptions.builder()
+                .parallelism(1)
+                .maxRetriesPerChunk(3)
+                .retryBaseDelay(Duration.ofMillis(1))
+                .connectTimeout(Duration.ofSeconds(5))
+                .requestTimeout(Duration.ofSeconds(5))
+                .build();
+
+        long startNanos = System.nanoTime();
+        try (Downloader dl = new Downloader(opts)) {
+            DownloadResult result = dl.download(uri, dest);
+            assertThat(result).isInstanceOf(DownloadResult.Failure.class);
+            DownloadResult.Failure f = (DownloadResult.Failure) result;
+            assertThat(f.error()).isEqualTo(DownloadError.HTTP_ERROR);
+        }
+        long elapsedMs = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
+
+        assertThat(elapsedMs)
+                .as("a 400 with Retry-After: 60 is non-retryable; we should not have stalled")
+                .isLessThan(5_000L);
+        assertThat(getCount.get())
+                .as("400 is non-retryable; exactly one GET should have been issued")
+                .isEqualTo(1);
+        assertThat(dest).doesNotExist();
+    }
+
+    @Test
     void serverReturns503ThenSucceeds_retryWorks() throws Exception {
         AtomicInteger getCount = new AtomicInteger();
         Path dest = tmp.resolve("out.bin");

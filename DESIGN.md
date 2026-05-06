@@ -297,7 +297,12 @@ preserve this invariant.
 
 Delay formula: `random(0, min(30 s, baseDelay × 2^attempt))`, full
 jitter prevents thundering-herd. Server-provided `Retry-After` on
-`429`/`503` overrides the formula.
+`429`/`503` overrides the formula. Both RFC 9110 forms are accepted
+(delta-seconds and HTTP-date); the parsed value is clamped at 5
+minutes so a hostile or fat-fingered server cannot stall the client
+indefinitely. A `Retry-After` returned alongside a non-retryable
+status (any 4xx other than 408 / 429) is read but never honored,
+because the response itself terminates the chunk.
 
 ## Progress dispatch and the single-thread invariant
 
