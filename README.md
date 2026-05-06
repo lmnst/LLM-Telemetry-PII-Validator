@@ -5,128 +5,27 @@
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 
 A Java 21 library and CLI for parallel, resumable, integrity-checked
-HTTP file downloads. Built as a data-ingestion primitive: every
-download either ends with the destination file matching a known
+HTTP file downloads. Either the destination file matches a known
 SHA-256, or no artifact is written.
 
-> Submitted to the **Data Ingestion team** at JetBrains as the
-> take-home solution for the Summer 2026 internship application.
+## Highlights
 
-## Table of contents
-
-1. [What this is](#what-this-is)
-2. [Architecture](#architecture)
-3. [Correctness pillars](#correctness-pillars)
-4. [Performance](#performance)
-5. [Quick start](#quick-start)
-6. [Public API](#public-api)
-7. [Testing strategy](#testing-strategy)
-8. [Further reading](#further-reading)
-9. [Requirements and build](#requirements-and-build)
-
-## What this is
-
-A small, dependency-free library that downloads a single HTTP
-resource by issuing many concurrent ranged GET requests and
-assembling the chunks into a single file. The shape is conventional;
-the value is in the safety properties.
-
-The take-home brief asked for parallel range-GET downloading with
-unit tests. This implementation goes a level deeper, treating the
-artifact as something that might land in an ingestion pipeline:
-
-- A failed download leaves no half-written file at the destination.
-- A succeeded download is byte-for-byte verifiable by SHA-256
-  *before* the destination file appears.
-- A crashed download can be resumed without re-fetching completed
-  bytes, and any drift in the source resource fails fast rather than
-  silently mixing old and new bytes.
-
-These guarantees are exercised by 153 unit and property tests, plus
-120 seeded chaos runs that inject 14 fault classes per HTTP GET.
-The non-test runtime has zero third-party dependencies.
-
-## Architecture
-
-The full download lifecycle, including the synchronous probe chunk
-that prevents the "lying server" failure mode and the integrity gate
-that runs before the atomic move:
-
-![Download lifecycle sequence diagram](docs/architecture.svg)
-
-A PlantUML source for the diagram lives at
-[`docs/architecture.puml`](docs/architecture.puml) and re-renders
-with `java -jar plantuml.jar -tsvg docs/architecture.puml`.
-
-## Correctness pillars
-
-The library makes three load-bearing claims. Each one is enforced by
-the same small piece of code, then verified by the chaos suite under
-seeded fault injection.
-
-### 1. The probe chunk prevents silent corruption
-
-Some servers advertise `Accept-Ranges: bytes` in the HEAD response
-but ignore the `Range` header on a subsequent GET, returning the
-full body with status `200`. If N parallel chunks each receive the
-full body and write it at their own offset, the destination file is
-silently corrupted.
-
-The mitigation is a synchronous *probe chunk* at offset 0, fetched
-before any other chunks fan out. If the probe returns `200`, the
-downloader treats the body as the complete download and commits it.
-No parallel writes ever happened, so corruption is impossible. If
-the probe returns `206`, the server's range support is confirmed
-and the remaining chunks fan out.
-
-### 2. Integrity is verified before the atomic move
-
-When the caller passes `--sha256 <expected>` (or
-`DownloaderOptions.expectedDigest(...)` in the library), the temp
-file is streamed through a `MessageDigest` after the last chunk
-completes and *before* `Files.move(..., ATOMIC_MOVE)`. A digest
-mismatch fails with `INTEGRITY_FAILURE` and the temp file is
-deleted; the destination path is never touched.
-
-This means a corrupt file is never visible at the destination, even
-transiently. A monitoring process tailing the output directory will
-never observe a wrong-bytes file under the right name.
-
-### 3. Resumption is fenced by `If-Range`
-
-When `RESUME_IF_VALID` mode is set, the downloader writes a
-`<dest>.part.json` sidecar manifest after each chunk's successful
-write and fsync. The manifest records the URL, ETag (or
-`Last-Modified`), `Content-Length`, chunk size, and a hex bitmap of
-completed chunks.
-
-On retry, only missing chunks are re-fetched, and every ranged GET
-carries `If-Range: <validator>`. A `200` response on a ranged GET
-with `If-Range` set means the server has replaced the resource. The
-adapter surfaces this and the downloader fails fast with
-`RESOURCE_CHANGED` rather than silently merging old and new bytes.
-
-## Performance
-
-A 64 MiB file served from `httpd:2.4` with 50 ms one-way `netem`
-delay, 4 MiB chunks, median of three runs. Re-derive without Docker
-via `./gradlew jmh`.
-
-| `--parallelism` | Median time | Throughput | Speedup |
-|---:|---:|---:|---:|
-| 1 (single-stream) | 2929 ms | 21.8 MiB/s | 1.00x |
-| 4                 | 1298 ms | 49.3 MiB/s | 2.26x |
-| 8                 |  995 ms | 64.3 MiB/s | 2.94x |
-| 16                |  827 ms | 77.4 MiB/s | 3.54x |
-
-The curve is the load-bearing claim, not the absolute numbers.
-Speedup compounds until the BDP of the link is filled, then the
-remaining wins come from request pipelining rather than added
-parallelism.
-
-For a zero-RTT loopback comparison against `curl` and `wget` (the
-unflattering case for any parallel downloader, framed honestly), see
-[`docs/COMPARISON.md`](docs/COMPARISON.md).
+- **Parallel** ranged GETs over virtual threads, bounded by a
+  configurable parallelism semaphore. ~3.5x speedup over a single
+  stream on a high-RTT link (see [Performance](#performance)).
+- **Atomic commit**: a temp `<dest>.part` is `fsync`ed and
+  `Files.move`d with `ATOMIC_MOVE` only after every chunk has
+  written and the digest has been verified. The destination path
+  never holds a corrupt or partial file.
+- **Resumable** via a sidecar JSON manifest, fenced by `If-Range`
+  so a changed source resource fails fast instead of silently
+  splicing old and new bytes.
+- **Chaos-tested**: 120 seeded runs inject 14 fault classes into
+  every HTTP GET; the suite asserts the same invariant on every
+  seed. Success means correct bytes; failure means a typed error
+  with no leftover artifact.
+- **Zero runtime dependencies.** The shipped JAR contains nothing
+  outside the JDK.
 
 ## Quick start
 
@@ -134,17 +33,15 @@ unflattering case for any parallel downloader, framed honestly), see
 ./gradlew installDist
 DL=build/install/parallel-downloader/bin/parallel-downloader
 
+# Local server with a 64 MiB random corpus
 mkdir -p /tmp/corpus
 head -c $((64 * 1024 * 1024)) /dev/urandom > /tmp/corpus/test.bin
-
 docker run --rm -d -p 8080:80 \
     -v /tmp/corpus:/usr/local/apache2/htdocs/ \
     --name dl-httpd httpd:2.4
 
 $DL --url http://localhost:8080/test.bin --out /tmp/dl.bin --report json
 ```
-
-The structured report:
 
 ```json
 {
@@ -156,13 +53,10 @@ The structured report:
 }
 ```
 
-The wrapper script `just demo` runs this end to end with a generated
-SHA-256 check and full teardown. The CLI exposes `--url`, `--out`,
-`--chunk-size`, `--parallelism`, `--sha256`, `--resume`, and
-`--report text|json`. Every failure mode has its own exit code; the
-full reference is in [`docs/USAGE.md`](docs/USAGE.md).
+`just demo` runs the same end-to-end with a generated SHA-256 check
+and teardown. Full CLI reference: [`docs/USAGE.md`](docs/USAGE.md).
 
-## Public API
+## Library usage
 
 ```java
 try (Downloader dl = Downloader.create(DownloaderOptions.builder()
@@ -174,27 +68,89 @@ try (Downloader dl = Downloader.create(DownloaderOptions.builder()
 
     DownloadResult result = dl.download(uri, dest);
     switch (result) {
-        case DownloadResult.Success s  -> System.out.println(s.bytes());
-        case DownloadResult.Failure f  -> System.err.println(f.error());
+        case DownloadResult.Success s -> System.out.println(s.bytes());
+        case DownloadResult.Failure f -> System.err.println(f.error());
     }
 }
 ```
 
-The full type list:
-
 | Type | Role |
 |---|---|
-| `Downloader` | Entry point: `download` / `downloadAsync` / `close` |
-| `DownloaderOptions` | Record + builder. Holds `expectedDigest`, `resumeStrategy`, `progressListener`. |
+| `Downloader` | `download` / `downloadAsync` / `close` |
+| `DownloaderOptions` | Record + builder. `expectedDigest`, `resumeStrategy`, `progressListener`. |
 | `DownloadResult` | Sealed: `Success` or `Failure`. |
 | `DownloadError` | Enum: `HTTP_ERROR`, `IO_ERROR`, `SIZE_MISMATCH`, `INTEGRITY_FAILURE`, `RESOURCE_CHANGED`, `CANCELLED`, `TIMEOUT`, `RANGES_NOT_SUPPORTED`. |
 | `ProgressListener` | SPI; `NO_OP` is the default. |
 | `ProgressEvent` | Sealed: `Started`, `ChunkCompleted`, `Failed`, `Finished`. |
 
-Library usage and progress-listener wiring are in
-[`docs/USAGE.md`](docs/USAGE.md).
+## Architecture
 
-## Testing strategy
+![Download lifecycle sequence diagram](docs/architecture.svg)
+
+Source: [`docs/architecture.puml`](docs/architecture.puml). Re-render
+with `java -jar plantuml.jar -tsvg docs/architecture.puml`.
+
+## Performance
+
+64 MiB file served from `httpd:2.4` with 50 ms one-way `netem`
+delay, 4 MiB chunks, median of three runs. Reproducible without
+Docker via `./gradlew jmh`.
+
+| `--parallelism` | Median time | Throughput | Speedup |
+|---:|---:|---:|---:|
+| 1 (single-stream) | 2929 ms | 21.8 MiB/s | 1.00x |
+| 4                 | 1298 ms | 49.3 MiB/s | 2.26x |
+| 8                 |  995 ms | 64.3 MiB/s | 2.94x |
+| 16                |  827 ms | 77.4 MiB/s | 3.54x |
+
+The shape of the curve is the load-bearing claim, not the absolute
+numbers. Speedup compounds until the BDP of the link is filled.
+
+For a zero-RTT loopback comparison against `curl` and `wget`, see
+[`docs/COMPARISON.md`](docs/COMPARISON.md).
+
+## Correctness model
+
+Three claims, each enforced at one place in the code and verified
+under seeded fault injection.
+
+### 1. Probe chunk before parallel fan-out
+
+Some servers advertise `Accept-Ranges: bytes` in HEAD but ignore
+the `Range` header on a subsequent GET, returning the full body
+with status `200`. If N parallel chunks each receive the full body
+and write at their own offset, the destination file is corrupted
+silently.
+
+A synchronous probe chunk at offset 0 runs before any other chunks
+fan out. If the probe returns `200`, the body is committed as the
+complete download; no parallel writes ever happen, so corruption is
+impossible. If the probe returns `206`, range support is confirmed
+and the remaining chunks fan out under the parallelism semaphore.
+
+### 2. Integrity is verified before the atomic move
+
+When `expectedDigest(...)` is set, the temp file is streamed
+through a `MessageDigest` after the last chunk completes and
+*before* `Files.move(..., ATOMIC_MOVE)`. A mismatch fails with
+`INTEGRITY_FAILURE` and deletes the temp file. The destination
+path is never touched on failure, so a downstream watcher cannot
+observe a wrong-bytes file under the right name even transiently.
+
+### 3. Resumption is fenced by `If-Range`
+
+In `RESUME_IF_VALID` mode, a `<dest>.part.json` sidecar manifest is
+written after each chunk's successful write and fsync. It records
+URL, ETag (or `Last-Modified`), `Content-Length`, chunk size, and a
+hex bitmap of completed chunks.
+
+On retry, only missing chunks are re-fetched, and every ranged GET
+carries `If-Range: <validator>`. A `200` on a ranged GET with
+`If-Range` set means the server has replaced the resource; the
+adapter surfaces this and the downloader fails fast with
+`RESOURCE_CHANGED` rather than splicing old and new bytes.
+
+## Testing
 
 | Layer | Count | What it covers |
 |---|---:|---|
@@ -205,35 +161,33 @@ Library usage and progress-listener wiring are in
 
 The chaos invariant: *Success implies the destination matches the
 source SHA-256; Failure implies a typed `DownloadError` with no
-leftover artifacts at the destination.* No "best-effort" middle
-ground is permitted. See [`DESIGN.md`](DESIGN.md) for the full
-trade-off analysis.
+leftover artifact at the destination.* No "best-effort" middle
+ground is permitted.
 
-## Further reading
-
-- **[`DESIGN.md`](DESIGN.md)**: trade-offs, the resumption state
-  machine, the chaos invariant, and what was deliberately left out.
-- **[`docs/USAGE.md`](docs/USAGE.md)**: full API reference, CLI flag
-  semantics, library and listener examples, exit-code table.
-- **[`docs/COMPARISON.md`](docs/COMPARISON.md)**: vs `curl`, `wget`
-  on zero-RTT loopback, three file sizes, hyperfine.
-- **[`docs/STORY-TESTCONTAINERS-DOCKER.md`](docs/STORY-TESTCONTAINERS-DOCKER.md)**:
-  a debugging episode about a silent integration-test skip on Docker
-  Engine 29.
-- **[`docs/architecture.puml`](docs/architecture.puml)**: PlantUML
-  source for the lifecycle diagram above.
-
-## Requirements and build
-
-- Java 21 or newer (the wrapper expects `JAVA_HOME` or `java` on
-  `PATH`).
-- Gradle 8.13+ (wrapper included; no system Gradle required).
+## Build
 
 ```bash
-./gradlew check        # all tests except chaos
-./gradlew test -PchaosTests   # chaos suite (~30 s on a laptop)
-./gradlew installDist  # produce CLI launcher under build/install/
-./gradlew javadoc      # publishable API docs
+./gradlew check                # all tests except chaos
+./gradlew test -PchaosTests    # chaos suite (~30 s)
+./gradlew installDist          # CLI launcher under build/install/
+./gradlew javadoc              # publishable API docs
 ```
 
 CI runs the full check on Linux, macOS, and Windows on every push.
+Requires Java 21 or newer; Gradle 8.13 wrapper included.
+
+## Further reading
+
+- [`DESIGN.md`](DESIGN.md): trade-offs, resumption state machine,
+  the chaos invariant, what was deliberately left out.
+- [`docs/USAGE.md`](docs/USAGE.md): full CLI reference, exit-code
+  table, library and listener examples.
+- [`docs/COMPARISON.md`](docs/COMPARISON.md): vs `curl`, `wget` on
+  zero-RTT loopback.
+- [`docs/STORY-TESTCONTAINERS-DOCKER.md`](docs/STORY-TESTCONTAINERS-DOCKER.md):
+  debugging episode about a silent integration-test skip on Docker
+  Engine 29.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
