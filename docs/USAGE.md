@@ -45,12 +45,16 @@ Sample JSON output:
 | Code | Meaning |
 |---:|---|
 | 0 | Success |
-| 1 | Generic failure |
-| 2 | HTTP 4xx (excluding 408/429) |
-| 3 | HTTP 5xx (after retries) or IO error |
-| 4 | Integrity check failed |
+| 1 | Generic failure (HTTP 4xx other than 408 / 429, `RANGES_NOT_SUPPORTED`) |
+| 2 | Usage / argument error (parse failure on `--url`, `--chunk-size`, `--sha256`, `--report`, etc.) |
+| 3 | Transient or network failure (I/O error, request timeout, HTTP 5xx after retries are exhausted) |
+| 4 | Integrity failure (digest mismatch on `--sha256`, or size mismatch against `Content-Length`) |
 | 5 | Cancelled |
 | 6 | Resource changed mid-resume |
+
+The mapping is enforced by `Main.exitCodeFor` and locked in by
+`MainCliTest.exitCodeFor_eachDownloadError_mapsAsDocumented`; the
+table above is the documentation, the code is the source of truth.
 
 ## Behavior matrix
 

@@ -57,7 +57,7 @@ public final class Main {
               1  generic failure (e.g. HTTP 4xx, ranges-not-supported)
               2  usage / argument error
               3  transient / network failure (I/O, timeout, HTTP 5xx)
-              4  integrity failure (size mismatch)
+              4  integrity failure (digest mismatch on --sha256, or size mismatch)
               5  cancelled
               6  resource changed
             """;

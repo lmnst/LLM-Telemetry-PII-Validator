@@ -1,11 +1,11 @@
 # Parallel Range-GET File Downloader
 
-[![CI](https://github.com/lmnst/java-parallel-downloader/actions/workflows/ci.yml/badge.svg)](https://github.com/lmnst/java-parallel-downloader/actions/workflows/ci.yml)
+[![CI](https://github.com/lmnst/LLM-Telemetry-PII-Validator/actions/workflows/ci.yml/badge.svg)](https://github.com/lmnst/LLM-Telemetry-PII-Validator/actions/workflows/ci.yml)
 ![Java](https://img.shields.io/badge/Java-21+-orange?logo=openjdk&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 
 ```java
-try (Downloader dl = Downloader.create(opts)) {
+try (Downloader dl = new Downloader(opts)) {
     DownloadResult result = dl.download(uri, dest);
 }
 ```
@@ -116,10 +116,10 @@ For a zero-RTT loopback comparison against `curl` and `wget`, see
 ## API surface
 
 ```java
-try (Downloader dl = Downloader.create(DownloaderOptions.builder()
+try (Downloader dl = new Downloader(DownloaderOptions.builder()
         .parallelism(8)
-        .chunkSize(8 * 1024 * 1024)
-        .expectedDigest(ExpectedDigest.sha256(hex))
+        .chunkSize(8 * 1024 * 1024L)
+        .expectedDigest(Algorithm.SHA_256, expectedBytes)
         .resumeStrategy(ResumeStrategy.RESUME_IF_VALID)
         .build())) {
 
@@ -137,6 +137,7 @@ try (Downloader dl = Downloader.create(DownloaderOptions.builder()
 | `DownloaderOptions` | Record + builder. `expectedDigest`, `resumeStrategy`, `progressListener`. |
 | `DownloadResult` | Sealed: `Success` or `Failure`. |
 | `DownloadError` | `HTTP_ERROR`, `IO_ERROR`, `SIZE_MISMATCH`, `INTEGRITY_FAILURE`, `RESOURCE_CHANGED`, `CANCELLED`, `TIMEOUT`, `RANGES_NOT_SUPPORTED`. |
+| `Algorithm` / `ExpectedDigest` | Algorithm enum (`SHA_256`) and the expected-digest record passed to `expectedDigest(...)`. |
 | `ProgressListener` | SPI; `NO_OP` is the default. |
 | `ProgressEvent` | Sealed: `Started`, `ChunkCompleted`, `Failed`, `Finished`. |
 
@@ -145,20 +146,21 @@ CLI flag reference and exit codes are in
 
 ## Tests
 
-| Layer | Count | What it covers |
-|---|---:|---|
-| Unit | 153 | Range planner, manifest, file assembler, retry policy, JSON encoder, CLI parser. |
-| Property | (in unit) | `RangePlanner` covers `totalBytes` exactly across random sizes. |
-| Integration | 4 | Real `httpd:2.4` via Testcontainers; full lifecycle through CLI binary. |
-| Chaos | 120 seeds | 14 fault classes per HTTP GET; the invariant is asserted on every seed. |
+| Suite | Tests | Run with | What it covers |
+|---|---:|---|---|
+| Default (unit + property + in-process) | 163 | `./gradlew test` | Range planner, manifest, retry policy, file assembler, downloader, integrity, progress, CLI parser, plus a 40-case property pass over random sizes and chunk sizes, and a 10-case in-process integration suite against the JDK `HttpServer`. |
+| Chaos | 121 | `./gradlew test -PchaosTests` | 120 seeded `ChaosPropertyTest` runs (14 fault classes per GET) plus one `ChaosResumeTest` that composes chaos with resume. |
+| Docker integration | 1 | `RUN_DOCKER_IT=1 ./gradlew test -PintegrationTests` | End-to-end through the installed CLI against `httpd:2.4` via Testcontainers. |
 
-The chaos suite is opt-in via `-PchaosTests` and exists because the
-invariant is about *combinations* of failures (a `503` on chunk 0,
-a truncated body on chunk 4, a malformed `Content-Range` on chunk 7,
-all in the same run). 14 fault classes times 8 chunks per run is a
-combinatorial space too large to enumerate by hand. A property test
-seeds the RNG and lets the harness explore; when it finds a bug,
-the seed in the failure message replays the exact sequence.
+Property tests are folded into the default suite (`PropertyTest` is one
+of the 163), not split out into a separate run. The chaos suite is
+opt-in because the invariant it asserts is about *combinations* of
+failures (a `503` on chunk 0, a truncated body on chunk 4, a malformed
+`Content-Range` on chunk 7, all in the same run). 14 fault classes
+times 8 chunks per run is a combinatorial space too large to enumerate
+by hand; a property test seeds the RNG and lets the harness explore.
+When it finds a bug the seed in the failure message replays the exact
+sequence.
 
 ## Build
 

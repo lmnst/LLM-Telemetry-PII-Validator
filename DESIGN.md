@@ -409,6 +409,36 @@ closed via the pattern-match in `close()`. `ExecutorService` pools in
 `downloadAsync` and `downloadChunksParallel` are both used in
 try-with-resources (Java 21 `AutoCloseable` support).
 
+## Known limitations
+
+These are deliberate, not bugs; recording them so a reviewer can see what
+the artifact does not promise.
+
+- **Cancellation latency is bounded by `requestTimeout`.** Cancellation is
+  cooperative: each in-flight GET observes the flag between `read()` calls.
+  A worker stuck inside the JDK's blocking SSL handshake cannot be
+  preempted earlier than the next read boundary or the request-timeout
+  expiry, whichever comes first.
+- **Single-URI by design.** The downloader targets one URI per call; there
+  is no multi-mirror or torrent-style fallback. A caller that wants
+  failover composes it on top of `Downloader` (try one URI, on failure
+  try the next).
+- **No proxy or auth handling.** The library exposes the `HttpAdapter`
+  interface for callers who need an authenticated `HttpClient`, a SOCKS
+  proxy, S3 SigV4, or anything else not built into `java.net.http`. The
+  adapter passed to `new Downloader(opts, adapter)` is the integration
+  point.
+- **Resume is a no-op on single-stream downloads.** When the server does
+  not advertise `Accept-Ranges: bytes` (or `parallelism == 1`), the
+  download runs as one GET; there are no chunk boundaries to checkpoint,
+  so `RESUME_IF_VALID` falls back to a fresh single-stream fetch and
+  ignores any pre-existing `.part` artifact.
+- **The manifest format is version-fenced.** The integer `version` field
+  is the only contract between an older `.part.meta` on disk and a newer
+  binary; a breaking change to the format bumps the integer and the
+  reader fails fast with `RESOURCE_CHANGED`. No migration is attempted
+  in either direction.
+
 ## What I skipped, and why
 
 - **HTTP/2 multiplexing**: `HttpClient` negotiates HTTP/2 automatically
