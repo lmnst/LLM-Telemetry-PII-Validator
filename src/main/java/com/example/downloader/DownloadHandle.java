@@ -7,9 +7,25 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+/**
+ * A handle to an asynchronous download started by
+ * {@link Downloader#downloadAsync(java.net.URI, java.nio.file.Path)}.
+ * Lets the caller poll for completion, wait with a timeout, or cancel.
+ * Cancellation is cooperative: it sets a flag observed by the worker thread
+ * and interrupts the future; the worker still runs its cleanup before the
+ * task settles.
+ */
 public final class DownloadHandle {
 
-    public enum State { RUNNING, DONE, CANCELLED }
+    /** Lifecycle state of a {@link DownloadHandle}. */
+    public enum State {
+        /** Worker is still running; {@link #join()} will block. */
+        RUNNING,
+        /** Worker completed normally (success or failure); {@link #join()} returns immediately. */
+        DONE,
+        /** Cancellation has been requested via {@link #cancel()}. */
+        CANCELLED
+    }
 
     private final Future<DownloadResult> future;
     private final CancelToken cancelToken;
@@ -20,12 +36,26 @@ public final class DownloadHandle {
         this.cancelToken = cancelToken;
     }
 
+    /**
+     * Requests cancellation of the running download. Sets the cooperative
+     * cancel flag, marks the handle CANCELLED, and interrupts the worker.
+     * Idempotent.
+     */
     public void cancel() {
         cancelToken.cancel();
         state = State.CANCELLED;
         future.cancel(true);
     }
 
+    /**
+     * Blocks until the download settles and returns the result. Cancellation
+     * is reported as a {@link DownloadResult.Failure} with
+     * {@link DownloadError#CANCELLED}; an unexpected runtime failure is
+     * reported as {@link DownloadError#IO_ERROR}.
+     *
+     * @return the result of the download (never null)
+     * @throws InterruptedException if the calling thread is interrupted
+     */
     public DownloadResult join() throws InterruptedException {
         try {
             DownloadResult result = future.get();
@@ -38,6 +68,15 @@ public final class DownloadHandle {
         }
     }
 
+    /**
+     * Like {@link #join()} but with a timeout. A timeout maps to
+     * {@link DownloadError#TIMEOUT} on the returned Failure; the worker
+     * keeps running in the background.
+     *
+     * @param timeout how long to wait
+     * @return       the result of the download (never null)
+     * @throws InterruptedException if the calling thread is interrupted
+     */
     public DownloadResult joinWithTimeout(Duration timeout) throws InterruptedException {
         try {
             DownloadResult result = future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
@@ -52,5 +91,6 @@ public final class DownloadHandle {
         }
     }
 
+    /** {@return the current lifecycle state} */
     public State state() { return state; }
 }

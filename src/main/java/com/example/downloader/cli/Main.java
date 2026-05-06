@@ -16,6 +16,12 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HexFormat;
 
+/**
+ * CLI entrypoint for the parallel range-GET downloader. Backed by
+ * {@link com.example.downloader.Downloader}; install via {@code ./gradlew run}
+ * or {@code ./gradlew installDist}. Run with {@code --help} for the full flag
+ * and exit-code reference.
+ */
 public final class Main {
 
     static final int EXIT_SUCCESS          = 0;
@@ -56,6 +62,11 @@ public final class Main {
               6  resource changed
             """;
 
+    /**
+     * CLI entrypoint. Exits with the code returned by {@link #run}.
+     *
+     * @param args command-line arguments
+     */
     public static void main(String[] args) {
         System.exit(run(args, System.out, System.err));
     }

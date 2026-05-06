@@ -24,6 +24,16 @@ import java.util.concurrent.Semaphore;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * Parallel range-GET file downloader. Use {@link #download} for a synchronous
+ * call or {@link #downloadAsync} for one that returns a {@link DownloadHandle}
+ * the caller can cancel. Configuration (chunk size, parallelism, retries,
+ * integrity, resume strategy, progress listener) is supplied via
+ * {@link DownloaderOptions}.
+ *
+ * <p>This class is {@link AutoCloseable}: closing it releases the underlying
+ * {@code HttpClient}. Multiple downloads can run on a single instance.
+ */
 public final class Downloader implements AutoCloseable {
 
     // RFC 9110 §14.4: Content-Range: bytes start-end/total  (total may be *)
@@ -33,6 +43,11 @@ public final class Downloader implements AutoCloseable {
     private final DownloaderOptions options;
     private final HttpAdapter http;
 
+    /**
+     * Creates a Downloader using the JDK's {@code java.net.http.HttpClient}.
+     *
+     * @param options download configuration
+     */
     public Downloader(DownloaderOptions options) {
         this.options = options;
         this.http = new JdkHttpAdapter(options);
@@ -45,11 +60,28 @@ public final class Downloader implements AutoCloseable {
 
     // ── public API ───────────────────────────────────────────────────────────
 
+    /**
+     * Downloads {@code source} to {@code destination} synchronously.
+     *
+     * @param source      the URI to fetch
+     * @param destination the file path to write
+     * @return            the typed result of the operation
+     * @throws InterruptedException if the calling thread is interrupted
+     */
     public DownloadResult download(URI source, Path destination) throws InterruptedException {
         CancelToken cancel = new CancelToken();
         return doDownload(source, destination, cancel);
     }
 
+    /**
+     * Starts an asynchronous download and returns a handle for cancellation
+     * and result retrieval. The handle's underlying virtual thread runs
+     * independently of the caller.
+     *
+     * @param source      the URI to fetch
+     * @param destination the file path to write
+     * @return            a handle for the running download
+     */
     public DownloadHandle downloadAsync(URI source, Path destination) {
         CancelToken cancel = new CancelToken();
         ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor();
@@ -58,6 +90,10 @@ public final class Downloader implements AutoCloseable {
         return new DownloadHandle(future, cancel);
     }
 
+    /**
+     * Releases the underlying HTTP client and any custom adapter that
+     * implements {@link AutoCloseable}. Idempotent.
+     */
     @Override
     public void close() {
         if (http instanceof AutoCloseable ac) {

@@ -21,6 +21,9 @@ repositories {
 }
 
 dependencies {
+    implementation("org.jspecify:jspecify:1.0.0")
+    compileOnly("org.jetbrains:annotations:24.1.0")
+
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("org.assertj:assertj-core:3.26.3")
@@ -36,4 +39,13 @@ tasks.test {
         if (!project.hasProperty("chaosTests")) excludeTags("chaos")
     }
     jvmArgs("-ea")
+}
+
+tasks.javadoc {
+    // Only document the public surface; package-private types are implementation detail.
+    options.memberLevel = org.gradle.external.javadoc.JavadocMemberLevel.PUBLIC
+    (options as StandardJavadocDocletOptions).apply {
+        addBooleanOption("Xdoclint:all", true)
+        addBooleanOption("Werror", true)
+    }
 }
