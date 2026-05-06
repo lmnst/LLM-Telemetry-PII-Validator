@@ -38,6 +38,16 @@ Sample JSON output:
 {"status":"success","file":"/tmp/downloaded.bin","bytes":67108864,"elapsedMs":234,"chunks":8}
 ```
 
+Add `--sha256 <64-hex-chars>` to verify the body against an expected SHA-256.
+A mismatch (e.g. corrupted CDN cache, tampered transit) fails with exit 4 and
+the destination is never written:
+
+```bash
+$ ./gradlew run --args="--url http://localhost:8080/test.bin --out /tmp/x.bin \
+    --sha256 0000000000000000000000000000000000000000000000000000000000000000 --report json"
+{"status":"failure","error":"INTEGRITY_FAILURE","exitCode":4,"cause":"integrity check failed: expected SHA-256 0000... got b5d4..."}
+```
+
 Run `./gradlew run --args="--help"` for the full flag and exit-code reference.
 
 ## Usage
@@ -113,12 +123,15 @@ try (Downloader downloader = new Downloader(DownloaderOptions.defaults())) {
 
 ```
 Downloader            — download(URI, Path) / downloadAsync(URI, Path) / close()
-DownloaderOptions     — record + Builder
-DownloadResult        — sealed: Success | Failure
-DownloadError         — enum: HTTP_ERROR | IO_ERROR | SIZE_MISMATCH | CANCELLED | TIMEOUT | RANGES_NOT_SUPPORTED
+DownloaderOptions     — record + Builder; expectedDigest(Algorithm, byte[])
+DownloadResult        — sealed: Success | Failure; Success.sha256() : Optional<byte[]>
+DownloadError         — enum: HTTP_ERROR | IO_ERROR | SIZE_MISMATCH | INTEGRITY_FAILURE
+                              | CANCELLED | TIMEOUT | RANGES_NOT_SUPPORTED
 DownloadHandle        — join() / joinWithTimeout(Duration) / cancel() / state()
 HttpAdapter           — inject a custom adapter (e.g. for tests)
 HttpStatusException   — Failure.cause() for HTTP_ERROR; carries statusCode()
+Algorithm             — enum: SHA_256 (single member; extensible)
+ExpectedDigest        — record (algorithm, bytes); validated in compact ctor
 cli.Main              — entry point for ./gradlew run
 ```
 

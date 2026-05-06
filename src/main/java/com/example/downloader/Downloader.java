@@ -1,10 +1,16 @@
 package com.example.downloader;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
@@ -102,6 +108,9 @@ public final class Downloader implements AutoCloseable {
         } catch (SizeMismatchException e) {
             asm.abort();
             return failure(DownloadError.SIZE_MISMATCH, e);
+        } catch (IntegrityException e) {
+            asm.abort();
+            return failure(DownloadError.INTEGRITY_FAILURE, e);
         } catch (HttpStatusException e) {
             asm.abort();
             return failure(DownloadError.HTTP_ERROR, e);
@@ -132,8 +141,8 @@ public final class Downloader implements AutoCloseable {
             if (head.contentLength() > 0 && total != head.contentLength()) {
                 throw new SizeMismatchException(head.contentLength(), total);
             }
-            asm.commit();
-            return success(dest, total, startNanos, 1);
+            Optional<byte[]> sha = verifyAndCommit(asm);
+            return success(dest, total, startNanos, 1, sha);
         }
 
         if (probe.status() != 206) {
@@ -168,8 +177,8 @@ public final class Downloader implements AutoCloseable {
             throw new SizeMismatchException(expected, totalWritten);
         }
 
-        asm.commit();
-        return success(dest, expected, startNanos, ranges.size());
+        Optional<byte[]> sha = verifyAndCommit(asm);
+        return success(dest, expected, startNanos, ranges.size(), sha);
     }
 
     private void downloadChunksParallel(URI uri, List<ByteRange> ranges,
@@ -267,8 +276,8 @@ public final class Downloader implements AutoCloseable {
             throw new HttpStatusException(resp.status());
         }
 
-        asm.commit();
-        return success(dest, resp.bytesWritten(), startNanos, 1);
+        Optional<byte[]> sha = verifyAndCommit(asm);
+        return success(dest, resp.bytesWritten(), startNanos, 1, sha);
     }
 
     /**
@@ -346,22 +355,68 @@ public final class Downloader implements AutoCloseable {
                 || status == 502 || status == 503 || status == 504;
     }
 
+    // ── integrity verification ───────────────────────────────────────────────
+
+    /**
+     * Streams the temp file through MessageDigest with a 64 KiB single-pass read
+     * (no double-buffering), compares to the configured expected digest, and only
+     * then commits. On mismatch the destination is never touched: throwing keeps
+     * the temp file in place so doDownload's catch path runs asm.abort().
+     */
+    private Optional<byte[]> verifyAndCommit(FileAssembler asm) throws IOException {
+        Optional<byte[]> computed = Optional.empty();
+        ExpectedDigest expected = options.expectedDigest();
+        if (expected != null) {
+            byte[] actual = computeDigest(asm.tempFile(), expected.algorithm());
+            computed = Optional.of(actual);
+            if (!Arrays.equals(actual, expected.bytes())) {
+                throw new IntegrityException(expected.bytes(), actual);
+            }
+        }
+        asm.commit();
+        return computed;
+    }
+
+    private static byte[] computeDigest(Path file, Algorithm algorithm) throws IOException {
+        MessageDigest md;
+        try {
+            md = MessageDigest.getInstance(algorithm.javaName());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IOException("digest algorithm not available: " + algorithm, e);
+        }
+        try (InputStream in = Files.newInputStream(file)) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) != -1) md.update(buf, 0, n);
+        }
+        return md.digest();
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    private static DownloadResult.Success success(Path dest, long bytes, long startNanos, int chunks) {
+    private static DownloadResult.Success success(Path dest, long bytes, long startNanos,
+                                                  int chunks, Optional<byte[]> sha256) {
         Duration elapsed = Duration.ofNanos(System.nanoTime() - startNanos);
-        return new DownloadResult.Success(dest, bytes, elapsed, chunks);
+        return new DownloadResult.Success(dest, bytes, elapsed, chunks, sha256);
     }
 
     private static DownloadResult.Failure failure(DownloadError error, Throwable cause) {
         return new DownloadResult.Failure(error, cause);
     }
 
-    // ── package-private exception ────────────────────────────────────────────
+    // ── package-private exceptions ───────────────────────────────────────────
 
     static final class SizeMismatchException extends IOException {
         SizeMismatchException(long expected, long actual) {
             super("size mismatch: expected " + expected + ", got " + actual);
+        }
+    }
+
+    static final class IntegrityException extends IOException {
+        IntegrityException(byte[] expected, byte[] actual) {
+            super("integrity check failed: expected SHA-256 "
+                    + HexFormat.of().formatHex(expected)
+                    + ", got " + HexFormat.of().formatHex(actual));
         }
     }
 }

@@ -54,6 +54,27 @@ Without `If-Range`, if the server replaces or truncates the file between the HEA
 
 `JdkHttpAdapter` captures the `ETag` from HEAD (stored in `HeadResponse.etag()`), but this value is not sent on chunk GET requests. Implementing `If-Range` would require adding an `ifRange` parameter to `HttpAdapter.get()`, passing the validator into each ranged GET, and treating a `200` response (resource changed or Range became invalid) as a typed `RESOURCE_CHANGED` failure. That is explicitly future work.
 
+## Streaming integrity verification
+
+When `DownloaderOptions.expectedDigest(...)` is configured, the downloader
+streams the temp file through a `MessageDigest` after the last chunk completes
+and **before** `FileAssembler.commit()`. The read uses a 64 KiB buffer in a
+single pass — no double-buffering — so the cost scales linearly with file size
+and does not require holding the body in memory.
+
+The check runs *before* the atomic move on purpose: if the computed digest does
+not match, `IntegrityException` is thrown, doDownload's catch path runs
+`asm.abort()` (deletes the `.part` file), and the destination path is never
+touched. Callers see `DownloadError.INTEGRITY_FAILURE`. The contract is the
+same as for any other failure mode: a corrupted file is never visible at the
+destination path, even momentarily.
+
+Whether or not an expected digest is supplied, `DownloadResult.Success` exposes
+`Optional<byte[]> sha256()` — populated when verification ran, empty otherwise.
+The `Algorithm` enum is single-member (`SHA_256`) to keep the surface
+extensible without speculative members; new algorithms add an enum constant
+and a `digestLengthBytes()` arm.
+
 ## Atomic write strategy and failure cleanup guarantees
 
 `FileAssembler` creates a temp file in the same directory as the destination (so `Files.move` stays on the same filesystem and `ATOMIC_MOVE` is available). The lifecycle:
@@ -84,7 +105,7 @@ Delay formula: `random(0, min(30 s, baseDelay × 2^attempt))` — full jitter pr
 ## What is deliberately out of scope
 
 - **`If-Range` / per-chunk ETag resumption**: adds significant state threading; useful for chunk sizes > 64 MiB where a mid-chunk retry wastes meaningful bandwidth.
-- **Caller-supplied SHA-256 verification**: callers can re-read the result path with `MessageDigest`. The property test suite verifies end-to-end byte identity via SHA-256 across 40+ random (size, chunk-size) combinations.
+- ~~**Caller-supplied SHA-256 verification**~~: now a first-class option (`expectedDigest(Algorithm.SHA_256, byte[])`). See "Streaming integrity verification" above.
 - **Progress callbacks**: would require a callback interface or reactive streams; the `DownloadResult.Success` record reports final byte count and elapsed time.
 - **Bandwidth throttling**: reduce `parallelism` and `chunkSize`.
 - **HTTP/2 multiplexing**: `HttpClient` negotiates HTTP/2 automatically when the server supports it.
@@ -94,6 +115,4 @@ Delay formula: `random(0, min(30 s, baseDelay × 2^attempt))` — full jitter pr
 ## What I would add with one more day
 
 1. **`If-Range` on each chunk GET**: wire `HeadResponse.etag()` into `JdkHttpAdapter.get()` when a range is requested; handle `200` fallback as a typed `RESOURCE_CHANGED` error.
-2. **Optional SHA-256 in `DownloaderOptions`**: stream the committed temp file through `MessageDigest` before the atomic move; one algorithm, 64 KiB buffer, delete `.part` on mismatch.
-3. **A thin CLI** (`Main.run(String[])` returning an exit code) with `./gradlew run` support, no framework dependencies.
-4. **Bandwidth measurement**: track bytes/second per chunk so the `Success` result can report effective throughput.
+2. **Bandwidth measurement**: track bytes/second per chunk so the `Success` result can report effective throughput.

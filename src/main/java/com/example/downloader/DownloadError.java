@@ -6,5 +6,6 @@ public enum DownloadError {
     IO_ERROR,
     CANCELLED,
     SIZE_MISMATCH,
+    INTEGRITY_FAILURE,
     TIMEOUT
 }

@@ -9,7 +9,8 @@ public record DownloaderOptions(
         Duration requestTimeout,
         int maxRetriesPerChunk,
         Duration retryBaseDelay,
-        String userAgent
+        String userAgent,
+        ExpectedDigest expectedDigest
 ) {
     public DownloaderOptions {
         if (chunkSize <= 0) throw new IllegalArgumentException("chunkSize must be > 0, got: " + chunkSize);
@@ -24,18 +25,11 @@ public record DownloaderOptions(
             throw new IllegalArgumentException("retryBaseDelay must be non-negative");
         if (userAgent == null || userAgent.isBlank())
             throw new IllegalArgumentException("userAgent must not be blank");
+        // expectedDigest may be null (no integrity check requested)
     }
 
     public static DownloaderOptions defaults() {
-        return new DownloaderOptions(
-                8L * 1024 * 1024,       // 8 MiB: amortizes TCP slow-start; 8 chunks of 64 MiB = meaningful parallelism
-                8,                       // typical sweet spot for a single host on a residential/office link
-                Duration.ofSeconds(10),
-                Duration.ofSeconds(60),
-                3,
-                Duration.ofMillis(200),
-                "parallel-downloader/1.0 (+java.net.http)"
-        );
+        return builder().build();
     }
 
     public static Builder builder() { return new Builder(); }
@@ -48,6 +42,7 @@ public record DownloaderOptions(
         private int maxRetriesPerChunk = 3;
         private Duration retryBaseDelay = Duration.ofMillis(200);
         private String userAgent = "parallel-downloader/1.0 (+java.net.http)";
+        private ExpectedDigest expectedDigest = null;
 
         public Builder chunkSize(long v)            { this.chunkSize = v; return this; }
         public Builder parallelism(int v)           { this.parallelism = v; return this; }
@@ -57,9 +52,15 @@ public record DownloaderOptions(
         public Builder retryBaseDelay(Duration v)   { this.retryBaseDelay = v; return this; }
         public Builder userAgent(String v)          { this.userAgent = v; return this; }
 
+        public Builder expectedDigest(Algorithm algorithm, byte[] bytes) {
+            this.expectedDigest = new ExpectedDigest(algorithm, bytes);
+            return this;
+        }
+
         public DownloaderOptions build() {
             return new DownloaderOptions(chunkSize, parallelism, connectTimeout,
-                    requestTimeout, maxRetriesPerChunk, retryBaseDelay, userAgent);
+                    requestTimeout, maxRetriesPerChunk, retryBaseDelay, userAgent,
+                    expectedDigest);
         }
     }
 }

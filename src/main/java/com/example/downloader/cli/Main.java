@@ -1,5 +1,6 @@
 package com.example.downloader.cli;
 
+import com.example.downloader.Algorithm;
 import com.example.downloader.Downloader;
 import com.example.downloader.DownloaderOptions;
 import com.example.downloader.DownloadResult;
@@ -10,6 +11,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.HexFormat;
 
 public final class Main {
 
@@ -32,6 +34,8 @@ public final class Main {
               --chunk-size <size>   Chunk size; bare number = bytes; suffixes K, M, G, KiB, MiB, GiB
                                     are 1024-based (e.g. 8M = 8MiB = 8388608). Default: 8 MiB.
               --parallelism <int>   Maximum concurrent ranged GETs. Default: 8.
+              --sha256 <hex>        Verify the download against this SHA-256 (64 hex chars).
+                                    Mismatch fails with exit 4; destination is not written.
               --report <text|json>  Output format. Default: text.
               -h, --help            Show this help and exit.
 
@@ -84,6 +88,7 @@ public final class Main {
         Path out;
         Long chunkSize;
         Integer parallelism;
+        byte[] sha256;
         Report report = Report.TEXT;
         boolean help;
 
@@ -97,6 +102,7 @@ public final class Main {
                     case "--out"         -> a.out = Path.of(value(argv, ++i, s));
                     case "--chunk-size"  -> a.chunkSize = parseSize(value(argv, ++i, s));
                     case "--parallelism" -> a.parallelism = parsePositiveInt(value(argv, ++i, s));
+                    case "--sha256"      -> a.sha256 = parseHex(value(argv, ++i, s), 32);
                     case "--report"      -> a.report = parseReport(value(argv, ++i, s));
                     default              -> throw new UsageException("unknown flag: " + s);
                 }
@@ -144,6 +150,19 @@ public final class Main {
         };
     }
 
+    private static byte[] parseHex(String s, int expectedLen) {
+        String trimmed = s.trim();
+        if (trimmed.length() != expectedLen * 2) {
+            throw new UsageException("--sha256 must be " + (expectedLen * 2)
+                    + " hex chars, got " + trimmed.length());
+        }
+        try {
+            return HexFormat.of().parseHex(trimmed);
+        } catch (IllegalArgumentException e) {
+            throw new UsageException("--sha256 must be valid hex: " + s);
+        }
+    }
+
     static long parseSize(String raw) {
         String s = raw.trim();
         if (s.isEmpty()) throw new UsageException("--chunk-size empty");
@@ -188,6 +207,7 @@ public final class Main {
         DownloaderOptions.Builder b = DownloaderOptions.builder();
         if (a.chunkSize != null) b.chunkSize(a.chunkSize);
         if (a.parallelism != null) b.parallelism(a.parallelism);
+        if (a.sha256 != null) b.expectedDigest(Algorithm.SHA_256, a.sha256);
         return b.build();
     }
 
@@ -233,10 +253,10 @@ public final class Main {
                 }
                 yield EXIT_GENERIC;
             }
-            case IO_ERROR, TIMEOUT          -> EXIT_TRANSIENT;
-            case SIZE_MISMATCH              -> EXIT_INTEGRITY;
-            case CANCELLED                  -> EXIT_CANCELLED;
-            case RANGES_NOT_SUPPORTED       -> EXIT_GENERIC;
+            case IO_ERROR, TIMEOUT                -> EXIT_TRANSIENT;
+            case SIZE_MISMATCH, INTEGRITY_FAILURE -> EXIT_INTEGRITY;
+            case CANCELLED                        -> EXIT_CANCELLED;
+            case RANGES_NOT_SUPPORTED             -> EXIT_GENERIC;
         };
     }
 

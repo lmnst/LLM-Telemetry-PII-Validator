@@ -46,6 +46,21 @@ class DownloaderUnitTest {
         }
     }
 
+    /**
+     * After Future.cancel(true), join() returns before the worker thread
+     * finishes asm.abort(). Poll up to 2 s for the .part file to disappear
+     * so that JUnit @TempDir cleanup doesn't race with our worker.
+     */
+    private void waitForPartCleanup() throws InterruptedException {
+        long deadline = System.nanoTime() + 2_000_000_000L;
+        while (System.nanoTime() < deadline) {
+            try (var s = Files.list(tmp)) {
+                if (s.noneMatch(p -> p.getFileName().toString().endsWith(".part"))) return;
+            } catch (IOException ignored) {}
+            Thread.sleep(10);
+        }
+    }
+
     // ── parallel (range-capable server) ─────────────────────────────────────
 
     @Test
@@ -317,6 +332,7 @@ class DownloaderUnitTest {
             assertThat(result).isInstanceOf(DownloadResult.Failure.class);
         }
 
+        waitForPartCleanup();
         assertThat(dest).doesNotExist();
     }
 
@@ -334,6 +350,7 @@ class DownloaderUnitTest {
             }
         }
 
+        waitForPartCleanup();
         assertNoPartFiles();
     }
 
