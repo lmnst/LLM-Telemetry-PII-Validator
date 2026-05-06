@@ -3,7 +3,7 @@ plugins {
     application
 }
 
-group = "com.example"
+group = "io.github.lmnst"
 version = "1.0-SNAPSHOT"
 
 java {
@@ -13,7 +13,7 @@ java {
 }
 
 application {
-    mainClass.set("com.example.downloader.cli.Main")
+    mainClass.set("io.github.lmnst.downloader.cli.Main")
 }
 
 repositories {
@@ -26,7 +26,9 @@ val bench: SourceSet = sourceSets.create("bench") {
 }
 
 dependencies {
-    implementation("org.jspecify:jspecify:1.0.0")
+    // Annotation-only dependencies stay off the runtime classpath; the
+    // non-test runtime is JDK-only by design.
+    compileOnly("org.jspecify:jspecify:1.0.0")
     compileOnly("org.jetbrains:annotations:24.1.0")
 
     testImplementation(platform("org.junit:junit-bom:5.11.4"))

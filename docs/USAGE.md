@@ -104,7 +104,7 @@ cli.Main              entry point for the installed CLI binary
 ## Library usage
 
 ```java
-import com.example.downloader.*;
+import io.github.lmnst.downloader.*;
 import java.net.URI;
 import java.nio.file.Path;
 
