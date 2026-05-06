@@ -11,6 +11,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# actions/checkout@v4 and actions/setup-java@v4 still ship Node 20 binaries;
+# GitHub deprecated Node 20 on its runners and will force-flip to Node 24 in
+# June 2026. Opting in now silences the per-job deprecation warning and locks
+# the workflow against the upcoming default change.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   check:
     name: check + javadoc (JDK 21, ${{ matrix.os }})
