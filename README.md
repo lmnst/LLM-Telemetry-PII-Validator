@@ -61,33 +61,38 @@ Three pieces of code make the invariant load-bearing rather than
 aspirational. Each one corresponds to a labelled phase in the
 diagram above.
 
-**Phase: probe chunk.** Some servers advertise `Accept-Ranges: bytes`
-in HEAD but ignore the `Range` header on the subsequent GET,
-returning the full body with status `200`. If N parallel chunks
-each receive the full body and write at their own offset, the
-destination file is corrupted silently. The probe chunk runs a
-synchronous GET at offset 0 *before* any other chunks fan out. A
-`200` is treated as the complete download and committed; no
-parallel writes ever happen, so corruption is impossible. A `206`
-confirms range support, and the remaining chunks fan out.
+### Probe chunk
 
-**Phase: integrity gate.** When `expectedDigest(...)` is set, the
-temp file is streamed through a `MessageDigest` after the last
-chunk completes and *before* `Files.move(..., ATOMIC_MOVE)`. A
-mismatch fails with `INTEGRITY_FAILURE` and deletes the temp file.
-The destination path is never touched on failure, so a downstream
-watcher cannot observe a wrong-bytes file under the right name,
-even transiently.
+Some servers advertise `Accept-Ranges: bytes` in HEAD but ignore
+the `Range` header on the subsequent GET, returning the full body
+with status `200`. If N parallel chunks each receive the full body
+and write at their own offset, the destination file is corrupted
+silently. The probe chunk runs a synchronous GET at offset 0
+*before* any other chunks fan out. A `200` is treated as the
+complete download and committed; no parallel writes ever happen,
+so corruption is impossible. A `206` confirms range support, and
+the remaining chunks fan out.
 
-**Phase: resumption fence.** In `RESUME_IF_VALID` mode, a
-`<dest>.part.json` sidecar manifest is written and `fsync`ed after
-each chunk's successful write. It records URL, ETag (or
-`Last-Modified`), `Content-Length`, chunk size, and a hex bitmap of
-completed chunks. On retry, only missing chunks are re-fetched, and
-every ranged GET carries `If-Range: <validator>`. A `200` on a
-ranged GET with `If-Range` set means the server has replaced the
-resource; the adapter surfaces this and the downloader fails fast
-with `RESOURCE_CHANGED` rather than splicing old and new bytes.
+### Integrity gate
+
+When `expectedDigest(...)` is set, the temp file is streamed
+through a `MessageDigest` after the last chunk completes and
+*before* `Files.move(..., ATOMIC_MOVE)`. A mismatch fails with
+`INTEGRITY_FAILURE` and deletes the temp file. The destination
+path is never touched on failure, so a downstream watcher cannot
+observe a wrong-bytes file under the right name, even transiently.
+
+### Resumption fence
+
+In `RESUME_IF_VALID` mode, a `<dest>.part.json` sidecar manifest is
+written and `fsync`ed after each chunk's successful write. It
+records URL, ETag (or `Last-Modified`), `Content-Length`, chunk
+size, and a hex bitmap of completed chunks. On retry, only missing
+chunks are re-fetched, and every ranged GET carries
+`If-Range: <validator>`. A `200` on a ranged GET with `If-Range`
+set means the server has replaced the resource; the adapter
+surfaces this and the downloader fails fast with `RESOURCE_CHANGED`
+rather than splicing old and new bytes.
 
 ## Speed
 
