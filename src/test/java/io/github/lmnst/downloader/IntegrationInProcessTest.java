@@ -321,6 +321,43 @@ class IntegrationInProcessTest {
     }
 
     @Test
+    void redirect301_isFollowedAndDownloadIsCorrect() throws Exception {
+        // /actual serves the corpus with full range-aware behavior; /redirect
+        // 301s every request to /actual. The JdkHttpAdapter must follow the
+        // redirect on both HEAD and the parallel ranged GETs, end up reading
+        // from /actual, and reconstruct the corpus byte-for-byte.
+        server.createContext("/actual", exchange -> serveWithRanges(exchange, FILE_DATA));
+        server.createContext("/redirect", exchange -> {
+            exchange.getResponseHeaders().set("Location", "/actual");
+            exchange.sendResponseHeaders(301, -1);
+            exchange.close();
+        });
+        server.start();
+        URI redirectUri = URI.create(
+                "http://127.0.0.1:" + server.getAddress().getPort() + "/redirect");
+        Path dest = tmp.resolve("out.bin");
+
+        DownloaderOptions opts = DownloaderOptions.builder()
+                .chunkSize(512 * 1024L)
+                .parallelism(4)
+                .connectTimeout(Duration.ofSeconds(5))
+                .requestTimeout(Duration.ofSeconds(30))
+                .build();
+
+        try (Downloader dl = new Downloader(opts)) {
+            DownloadResult result = dl.download(redirectUri, dest);
+            assertThat(result).isInstanceOf(DownloadResult.Success.class);
+            DownloadResult.Success s = (DownloadResult.Success) result;
+            assertThat(s.bytes()).isEqualTo(FILE_SIZE);
+        }
+
+        assertThat(sha256(Files.readAllBytes(dest))).isEqualTo(FILE_HASH);
+        assertThat(getRangeCount.get())
+                .as("ranged GETs land on /actual after the 301")
+                .isEqualTo(8);
+    }
+
+    @Test
     void serverReturns503ThenSucceeds_retryWorks() throws Exception {
         AtomicInteger getCount = new AtomicInteger();
         Path dest = tmp.resolve("out.bin");

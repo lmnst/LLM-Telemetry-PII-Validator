@@ -26,6 +26,12 @@ final class JdkHttpAdapter implements HttpAdapter, AutoCloseable {
     public JdkHttpAdapter(DownloaderOptions options) {
         this.client = HttpClient.newBuilder()
                 .connectTimeout(options.connectTimeout())
+                // NORMAL follows 3xx redirects in all cases except an HTTPS
+                // origin redirecting to HTTP, which would silently downgrade
+                // the channel and could leak credentials to a passive observer.
+                // The JDK default is NEVER, which is the wrong default for a
+                // downloader: presigned URLs and CDN aliases routinely 301/302.
+                .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
         this.requestTimeout = options.requestTimeout();
         this.userAgent = options.userAgent();
