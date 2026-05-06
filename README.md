@@ -102,13 +102,21 @@ Docker via `./gradlew jmh`.
 
 | `--parallelism` | Median time | Throughput | Speedup |
 |---:|---:|---:|---:|
-| 1 (single-stream) | 2929 ms | 21.8 MiB/s | 1.00x |
-| 4                 | 1298 ms | 49.3 MiB/s | 2.26x |
-| 8                 |  995 ms | 64.3 MiB/s | 2.94x |
-| 16                |  827 ms | 77.4 MiB/s | 3.54x |
+| 1 (single-stream) | 2080 ms | 30.8 MiB/s | 1.00x |
+| 4                 | 1897 ms | 33.7 MiB/s | 1.10x |
+| 8                 | 1988 ms | 32.2 MiB/s | 1.05x |
+| 16                | 1830 ms | 35.0 MiB/s | 1.14x |
 
 The shape of the curve is the load-bearing claim, not the absolute
-numbers. Speedup compounds until the BDP of the link is filled.
+numbers. On this host (Windows + Docker Desktop, port-forwarded from
+the WSL2 backend) the curve flattens almost immediately: parallelism
+buys roughly 10% over single-stream and never compounds further,
+because the per-connection ceiling is set by the host-to-container
+proxy, not by the simulated link. The same code on a less proxied
+network path (Linux host with direct container networking, or a real
+remote server with non-trivial RTT) does compound until the BDP of
+the link is filled; that regime is what the parallelism flag is for,
+and what the chaos and integration suites guard.
 
 For a zero-RTT loopback comparison against `curl` and `wget`, see
 [`docs/COMPARISON.md`](docs/COMPARISON.md).

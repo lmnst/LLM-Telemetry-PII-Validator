@@ -31,10 +31,11 @@ DL="$(pwd)/build/install/parallel-downloader/bin/parallel-downloader"
 # toolchain just compiled with so the comparison runs in the same JVM
 # regardless of what's on the operator's PATH.
 TOOLCHAIN_JDK=$(./gradlew --quiet -q javaToolchains 2>/dev/null \
-    | awk '/Eclipse Temurin JDK 21/,/Detected by/' \
+    | awk '/JDK 21/,/Detected by/' \
     | grep -E '^ +\| Location' \
     | head -1 \
-    | sed -E 's/^ +\| Location: +//')
+    | sed -E 's/^ +\| Location: +//' \
+    || true)
 if [[ -n "${TOOLCHAIN_JDK}" && -x "${TOOLCHAIN_JDK}/bin/java" ]]; then
     export JAVA_HOME="${TOOLCHAIN_JDK}"
     echo "[run-comparison] using JAVA_HOME=${JAVA_HOME}"
@@ -46,8 +47,15 @@ for size in 10 100 1024; do
 done
 
 echo "[run-comparison] starting httpd:2.4 on localhost:${PORT}..."
+# On MSYS / git-bash, native docker.exe requires a Windows-style path
+# for bind-mount sources; mktemp emits POSIX paths that Docker Desktop
+# cannot translate, so the mount silently fails and httpd serves 404.
+CORPUS_MOUNT="$CORPUS"
+if command -v cygpath >/dev/null 2>&1; then
+    CORPUS_MOUNT=$(cygpath -w "$CORPUS")
+fi
 docker run --rm -d -p "$PORT:80" \
-    -v "$CORPUS":/usr/local/apache2/htdocs/ \
+    -v "$CORPUS_MOUNT":/usr/local/apache2/htdocs/ \
     --name "$NAME" httpd:2.4 >/dev/null
 
 for _ in {1..30}; do
