@@ -191,6 +191,44 @@ class IntegrationInProcessTest {
     }
 
     @Test
+    void getNeverWritesBody_failsWithTimeoutError() throws Exception {
+        Path dest = tmp.resolve("out.bin");
+
+        server.createContext("/stall", ex -> {
+            if ("HEAD".equalsIgnoreCase(ex.getRequestMethod())) {
+                ex.getResponseHeaders().set("Content-Length", String.valueOf(FILE_DATA.length));
+                ex.sendResponseHeaders(200, -1);
+                ex.close();
+                return;
+            }
+            // GET handler: sleep past the configured request timeout, then close
+            // without writing headers. The client sees an HttpTimeoutException.
+            try { Thread.sleep(3_000); } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            ex.close();
+        });
+        server.start();
+        URI uri = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/stall");
+
+        DownloaderOptions opts = DownloaderOptions.builder()
+                .parallelism(1)
+                .maxRetriesPerChunk(0)
+                .retryBaseDelay(Duration.ZERO)
+                .connectTimeout(Duration.ofSeconds(2))
+                .requestTimeout(Duration.ofMillis(400))
+                .build();
+
+        try (Downloader dl = new Downloader(opts)) {
+            DownloadResult result = dl.download(uri, dest);
+            assertThat(result).isInstanceOf(DownloadResult.Failure.class);
+            DownloadResult.Failure f = (DownloadResult.Failure) result;
+            assertThat(f.error()).isEqualTo(DownloadError.TIMEOUT);
+        }
+        assertThat(dest).doesNotExist();
+    }
+
+    @Test
     void retryAfterHeader_isHonoredOn429() throws Exception {
         AtomicInteger getCount = new AtomicInteger();
         Path dest = tmp.resolve("out.bin");

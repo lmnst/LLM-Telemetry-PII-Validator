@@ -39,12 +39,10 @@ final class JdkHttpAdapter implements HttpAdapter, AutoCloseable {
                 .timeout(requestTimeout)
                 .build();
 
-        HttpResponse<Void> resp;
-        try {
-            resp = client.send(req, HttpResponse.BodyHandlers.discarding());
-        } catch (java.net.http.HttpTimeoutException e) {
-            throw new IOException("HEAD timed out: " + uri, e);
-        }
+        // HttpTimeoutException already extends IOException, so we let it
+        // propagate unwrapped; Downloader pattern-matches on it to surface
+        // DownloadError.TIMEOUT distinctly from generic IO failures.
+        HttpResponse<Void> resp = client.send(req, HttpResponse.BodyHandlers.discarding());
 
         long contentLength = resp.headers().firstValueAsLong("Content-Length").orElse(-1L);
         boolean acceptRanges = resp.headers().firstValue("Accept-Ranges")
@@ -73,12 +71,10 @@ final class JdkHttpAdapter implements HttpAdapter, AutoCloseable {
             reqBuilder.header("If-Range", ifRange);
         }
 
-        HttpResponse<InputStream> resp;
-        try {
-            resp = client.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofInputStream());
-        } catch (java.net.http.HttpTimeoutException e) {
-            throw new IOException("GET timed out: " + uri, e);
-        }
+        // Same propagation as head(): HttpTimeoutException flows through as
+        // an IOException subtype; the Downloader maps it onto Trigger.Timeout.
+        HttpResponse<InputStream> resp =
+                client.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofInputStream());
 
         String contentRange = resp.headers().firstValue("Content-Range").orElse(null);
         long bytesWritten = 0;

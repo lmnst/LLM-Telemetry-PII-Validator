@@ -3,6 +3,7 @@ package com.example.downloader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.net.http.HttpTimeoutException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -125,6 +126,8 @@ public final class Downloader implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return failure(DownloadError.CANCELLED, e);
+        } catch (HttpTimeoutException e) {
+            return failure(DownloadError.TIMEOUT, e);
         } catch (IOException e) {
             return failure(DownloadError.IO_ERROR, e);
         }
@@ -179,6 +182,9 @@ public final class Downloader implements AutoCloseable {
         } catch (HttpStatusException e) {
             asm.abort();
             return failure(DownloadError.HTTP_ERROR, e);
+        } catch (HttpTimeoutException e) {
+            asm.abort();
+            return failure(DownloadError.TIMEOUT, e);
         } catch (IOException e) {
             asm.abort();
             return failure(DownloadError.IO_ERROR, e);
@@ -426,6 +432,11 @@ public final class Downloader implements AutoCloseable {
 
             } catch (InterruptedException e) {
                 throw e; // cancellation, do not retry
+            } catch (HttpTimeoutException e) {
+                Optional<Duration> delay = retry.evaluate(attempt,
+                        new RetryPolicy.Trigger.Timeout());
+                if (delay.isEmpty()) throw e;
+                Thread.sleep(delay.get().toMillis());
             } catch (IOException e) {
                 Optional<Duration> delay = retry.evaluate(attempt,
                         new RetryPolicy.Trigger.IoFailure(e));

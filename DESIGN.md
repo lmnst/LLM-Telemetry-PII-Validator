@@ -290,6 +290,10 @@ stays on the same filesystem and `ATOMIC_MOVE` is available).
 
 Retryable triggers: HTTP `408`, `429`, `500`, `502`, `503`, `504`;
 `IOException`; connect/read timeout. Not retried: all other 4xx codes.
+Timeout is its own `Trigger.Timeout` arm rather than being collapsed into
+`IoFailure`, so a future tweak to its retry curve (e.g. a longer first-attempt
+backoff after a timeout) does not require pattern-matching on exception
+classes inside the retry policy.
 `Content-Range` validation and truncated-body checks run *outside* the
 per-chunk retry loop, so a protocol violation fails the entire download
 immediately rather than triggering a retry. Future refactors should
